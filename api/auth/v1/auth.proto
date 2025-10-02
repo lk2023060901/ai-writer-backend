@@ -1,0 +1,118 @@
+syntax = "proto3";
+
+package api.auth.v1;
+
+option go_package = "github.com/yourusername/ai-writer-backend/api/auth/v1;authv1";
+
+import "api/auth/v1/types.proto";
+
+// AuthService handles authentication and authorization
+service AuthService {
+  // Register creates a new user account
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Login authenticates a user and returns tokens
+  rpc Login(LoginRequest) returns (LoginResponse);
+
+  // RefreshToken exchanges a refresh token for a new access token
+  rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
+
+  // Enable2FA initiates two-factor authentication setup
+  rpc Enable2FA(Enable2FARequest) returns (Enable2FAResponse);
+
+  // GetQRCode returns the QR code image for TOTP setup
+  rpc GetQRCode(GetQRCodeRequest) returns (GetQRCodeResponse);
+
+  // Confirm2FA confirms and activates two-factor authentication
+  rpc Confirm2FA(Confirm2FARequest) returns (Confirm2FAResponse);
+
+  // Verify2FA verifies a 2FA code during login
+  rpc Verify2FA(Verify2FARequest) returns (Verify2FAResponse);
+
+  // Disable2FA disables two-factor authentication
+  rpc Disable2FA(Disable2FARequest) returns (Disable2FAResponse);
+}
+
+// Register
+message RegisterRequest {
+  string name = 1;
+  string email = 2;
+  string password = 3;
+}
+
+message RegisterResponse {
+  string user_id = 1;
+  string email = 2;
+  string message = 3;
+}
+
+// Login
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  bool require_2fa = 1;
+  string pending_auth_id = 2; // 当 require_2fa=true 时返回，用于后续 2FA 验证
+  TokenPair tokens = 3;        // 当 require_2fa=false 时返回
+}
+
+// RefreshToken
+message RefreshTokenRequest {
+  string refresh_token = 1;
+}
+
+message RefreshTokenResponse {
+  TokenPair tokens = 1;
+}
+
+// Enable2FA
+message Enable2FARequest {
+  string user_id = 1;
+}
+
+message Enable2FAResponse {
+  TwoFactorSetup setup = 1;
+}
+
+// GetQRCode
+message GetQRCodeRequest {
+  string user_id = 1;
+}
+
+message GetQRCodeResponse {
+  bytes qr_code_image = 1; // PNG image data
+}
+
+// Confirm2FA
+message Confirm2FARequest {
+  string user_id = 1;
+  string code = 2;
+}
+
+message Confirm2FAResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Verify2FA
+message Verify2FARequest {
+  string pending_auth_id = 1; // 从 Login 返回的 pending_auth_id
+  string code = 2;             // 6位 TOTP 验证码
+}
+
+message Verify2FAResponse {
+  TokenPair tokens = 1;
+}
+
+// Disable2FA
+message Disable2FARequest {
+  string user_id = 1;
+  string password = 2;
+}
+
+message Disable2FAResponse {
+  bool success = 1;
+  string message = 2;
+}

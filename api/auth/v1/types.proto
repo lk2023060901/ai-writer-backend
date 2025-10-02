@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package api.auth.v1;
+
+option go_package = "github.com/yourusername/ai-writer-backend/api/auth/v1;authv1";
+
+import "google/protobuf/timestamp.proto";
+
+// User represents a user account
+message User {
+  int64 id = 1;
+  string name = 2;
+  string email = 3;
+  bool email_verified = 4;
+  bool two_factor_enabled = 5;
+  google.protobuf.Timestamp last_login_at = 6;
+  string last_login_ip = 7;
+  int32 failed_login_attempts = 8;
+  google.protobuf.Timestamp locked_until = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+// TokenPair represents access and refresh tokens
+message TokenPair {
+  string access_token = 1;
+  string refresh_token = 2;
+  int64 expires_in = 3; // seconds
+}
+
+// TwoFactorSetup contains TOTP secret and backup codes
+message TwoFactorSetup {
+  string secret = 1;
+  string qr_code_url = 2;
+  repeated string backup_codes = 3;
+}

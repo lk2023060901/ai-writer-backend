@@ -2,6 +2,7 @@ package database
 
 import (
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -128,7 +129,7 @@ func (c *Config) Validate() error {
 // DSN returns the PostgreSQL connection DSN
 func (c *Config) DSN() string {
 	dsn := "host=" + c.Host +
-		" port=" + string(rune(c.Port)) +
+		" port=" + fmt.Sprintf("%d", c.Port) +
 		" user=" + c.User +
 		" password=" + c.Password +
 		" dbname=" + c.DBName +

@@ -1,7 +1,25 @@
 {
   "permissions": {
     "allow": [
-      "Bash(go doc:*)"
+      "Bash(go doc:*)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(curl:*)",
+      "Bash(curl -s -X POST http://localhost:8080/api/v1/auth/register -H \"Content-Type: application/json\" -d '{\"\"\"\"username\"\"\"\":\"\"\"\"testuser\"\"\"\",\"\"\"\"email\"\"\"\":\"\"\"\"test@example.com\"\"\"\",\"\"\"\"password\"\"\"\":\"\"\"\"Test123456\"\"\"\"}')",
+      "Bash(chmod:*)",
+      "Bash(bash:*)",
+      "Bash(tee:*)",
+      "Bash(docker exec:*)",
+      "Bash(make migrate-up:*)",
+      "Bash(/tmp/final_test.sh:*)",
+      "Read(//Users/liukai/Library/**)",
+      "Bash(sqlite3:*)",
+      "Bash(cat:*)",
+      "Bash(while read file)",
+      "Bash(do if grep -q \"uQ8DMNGzyvyeyVmwvZdsu\" \"$file\")",
+      "Bash(then echo \"Found in: $file\" fi done)"
     ],
     "deny": [],
     "ask": []

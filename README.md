@@ -84,12 +84,138 @@ The server will start on `http://localhost:8080`
 curl http://localhost:8080/health
 ```
 
-### User Management
+### Authentication
+
+#### Register
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Test User",
+    "email": "test@example.com",
+    "password": "SecurePassword123"
+  }'
+```
+
+**Response:**
+```json
+{
+  "user_id": 1,
+  "email": "test@example.com",
+  "message": "Registration successful. Please verify your email."
+}
+```
+
+#### Login
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "test@example.com",
+    "password": "SecurePassword123"
+  }'
+```
+
+**Response:**
+```json
+{
+  "require_2fa": false,
+  "tokens": {
+    "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "refresh_token": "36dc50258b45dc6a4f9bcba22e062b83...",
+    "expires_in": 900
+  }
+}
+```
+
+#### Refresh Token
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{
+    "refresh_token": "36dc50258b45dc6a4f9bcba22e062b83..."
+  }'
+```
+
+**Response:**
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "36dc50258b45dc6a4f9bcba22e062b83...",
+  "expires_in": 900
+}
+```
+
+#### Enable 2FA (Protected)
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/2fa/enable \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+**Response:**
+```json
+{
+  "secret": "PPDYJHBIXMF4IEZGOW7EFJPFFZ4OBPPG",
+  "qr_code_url": "/auth/2fa/qrcode",
+  "backup_codes": [
+    "a7eb-6ef9-11eb-c73b",
+    "e315-a3f2-00ce-c2b8",
+    "..."
+  ]
+}
+```
+
+#### Get QR Code (Protected)
+```bash
+curl -X GET http://localhost:8080/api/v1/auth/2fa/qrcode \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+Returns a PNG image of the QR code to scan with authenticator app.
+
+#### Confirm 2FA (Protected)
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/2fa/confirm \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -d '{
+    "code": "123456"
+  }'
+```
+
+#### Verify 2FA (During Login)
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/2fa/verify \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "test@example.com",
+    "code": "123456"
+  }'
+```
+
+#### Disable 2FA (Protected)
+```bash
+curl -X POST http://localhost:8080/api/v1/auth/2fa/disable \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -d '{
+    "password": "SecurePassword123"
+  }'
+```
+
+### User Management (Protected)
+
+All user management endpoints require authentication. Include the access token in the Authorization header:
+```
+Authorization: Bearer YOUR_ACCESS_TOKEN
+```
 
 **Create User**
 ```bash
 curl -X POST http://localhost:8080/api/v1/users \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
   -d '{
     "name": "John Doe",
     "email": "john@example.com"
@@ -98,18 +224,21 @@ curl -X POST http://localhost:8080/api/v1/users \
 
 **Get User**
 ```bash
-curl http://localhost:8080/api/v1/users/1
+curl http://localhost:8080/api/v1/users/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 **List Users**
 ```bash
-curl "http://localhost:8080/api/v1/users?page=1&page_size=10"
+curl "http://localhost:8080/api/v1/users?page=1&page_size=10" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 **Update User**
 ```bash
 curl -X PUT http://localhost:8080/api/v1/users/1 \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
   -d '{
     "name": "John Smith",
     "email": "john.smith@example.com"
@@ -118,7 +247,8 @@ curl -X PUT http://localhost:8080/api/v1/users/1 \
 
 **Delete User**
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/users/1
+curl -X DELETE http://localhost:8080/api/v1/users/1 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
 ```
 
 ## Infrastructure Services

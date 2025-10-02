@@ -27,7 +27,7 @@ type CreateUserRequest struct {
 }
 
 type UserResponse struct {
-	ID        int64  `json:"id"`
+	ID        string  `json:"id"`
 	Name      string `json:"name"`
 	Email     string `json:"email"`
 	CreatedAt string `json:"created_at"`
@@ -52,8 +52,8 @@ func (s *UserService) CreateUser(c *gin.Context) {
 }
 
 func (s *UserService) GetUser(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
+	id := c.Param("id")
+	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
 		return
 	}
@@ -88,8 +88,8 @@ func (s *UserService) ListUsers(c *gin.Context) {
 }
 
 func (s *UserService) UpdateUser(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
+	id := c.Param("id")
+	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
 		return
 	}
@@ -116,8 +116,8 @@ func (s *UserService) UpdateUser(c *gin.Context) {
 }
 
 func (s *UserService) DeleteUser(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
+	id := c.Param("id")
+	if id == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
 		return
 	}

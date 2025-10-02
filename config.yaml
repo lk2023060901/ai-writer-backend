@@ -1,6 +1,7 @@
 server:
   host: "0.0.0.0"
   port: 8080
+  grpc_port: 9090
 
 database:
   host: "localhost"
@@ -49,3 +50,9 @@ mineru:
   enable_formula: true
   enable_table: true
   model_version: "pipeline"
+
+auth:
+  jwt_secret: "oyogames.cn"
+  jwt_issuer: "ai-writer-backend"
+  totp_issuer: "AI Writer"
+  backup_codes: 8

@@ -6,11 +6,12 @@ import (
 	"time"
 
 	"github.com/lk2023060901/ai-writer-backend/internal/conf"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/database"
+	pkglogger "github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
+	pkgmilvus "github.com/lk2023060901/ai-writer-backend/internal/pkg/milvus"
+	pkgminio "github.com/lk2023060901/ai-writer-backend/internal/pkg/minio"
+	pkgredis "github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
 	"github.com/lk2023060901/ai-writer-backend/internal/user/data"
-	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
-	"github.com/milvus-io/milvus-sdk-go/v2/client"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -19,9 +20,10 @@ import (
 
 type Data struct {
 	DB           *gorm.DB
-	RedisClient  *redis.Client
-	MinIOClient  *minio.Client
-	MilvusClient client.Client
+	DBWrapper    *database.DB
+	RedisClient  *pkgredis.Client
+	MinIOClient  *pkgminio.Client
+	MilvusClient *pkgmilvus.Client
 	Logger       *zap.Logger
 }
 
@@ -32,26 +34,51 @@ func NewData(config *conf.Config, log *zap.Logger) (*Data, func(), error) {
 		return nil, nil, fmt.Errorf("failed to init database: %w", err)
 	}
 
-	// Initialize Redis
-	redisClient := initRedis(config)
-	if err := redisClient.Ping(context.Background()).Err(); err != nil {
-		return nil, nil, fmt.Errorf("failed to connect to redis: %w", err)
+	// Initialize Redis using internal wrapper
+	wrapperLog, err := pkglogger.New(&pkglogger.Config{
+		Level:  "info",
+		Format: "json",
+		Output: "console",
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create redis logger: %w", err)
+	}
+
+	redisClient, err := initRedis(config, wrapperLog)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to init redis: %w", err)
 	}
 
 	// Initialize MinIO
-	minioClient, err := initMinIO(config)
+	minioClient, err := initMinIO(config, log)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to init minio: %w", err)
 	}
 
 	// Initialize Milvus
-	milvusClient, err := initMilvus(config)
+	milvusClient, err := initMilvus(config, wrapperLog)
 	if err != nil {
 		log.Warn("failed to init milvus (this is optional)", zap.Error(err))
 	}
 
+	// Initialize database wrapper
+	dbWrapper, err := database.New(&database.Config{
+		Host:     config.Database.Host,
+		Port:     config.Database.Port,
+		User:     config.Database.User,
+		Password: config.Database.Password,
+		DBName:   config.Database.DBName,
+		SSLMode:  config.Database.SSLMode,
+		LogLevel: "warn",
+		Timezone: "Asia/Shanghai",
+	}, wrapperLog)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to init database wrapper: %w", err)
+	}
+
 	d := &Data{
 		DB:           db,
+		DBWrapper:    dbWrapper,
 		RedisClient:  redisClient,
 		MinIOClient:  minioClient,
 		MilvusClient: milvusClient,
@@ -70,7 +97,7 @@ func NewData(config *conf.Config, log *zap.Logger) (*Data, func(), error) {
 		}
 
 		if milvusClient != nil {
-			milvusClient.Close()
+			milvusClient.Close(context.Background())
 		}
 	}
 
@@ -103,19 +130,32 @@ func initDB(config *conf.Config, log *zap.Logger) (*gorm.DB, error) {
 	return db, nil
 }
 
-func initRedis(config *conf.Config) *redis.Client {
-	return redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("%s:%d", config.Redis.Host, config.Redis.Port),
-		Password: config.Redis.Password,
-		DB:       config.Redis.DB,
-	})
+func initRedis(config *conf.Config, log *pkglogger.Logger) (*pkgredis.Client, error) {
+	redisCfg := &pkgredis.Config{
+		Mode:         pkgredis.ModeSingle,
+		MasterAddr:   fmt.Sprintf("%s:%d", config.Redis.Host, config.Redis.Port),
+		Password:     config.Redis.Password,
+		DB:           config.Redis.DB,
+		PoolSize:     10,
+		MinIdleConns: 5,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+		PoolTimeout:  4 * time.Second,
+	}
+	return pkgredis.New(redisCfg, log)
 }
 
-func initMinIO(config *conf.Config) (*minio.Client, error) {
-	minioClient, err := minio.New(config.MinIO.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(config.MinIO.AccessKey, config.MinIO.SecretKey, ""),
-		Secure: config.MinIO.UseSSL,
-	})
+func initMinIO(config *conf.Config, log *zap.Logger) (*pkgminio.Client, error) {
+	minioCfg := &pkgminio.Config{
+		Endpoint:        config.MinIO.Endpoint,
+		AccessKeyID:     config.MinIO.AccessKey,
+		SecretAccessKey: config.MinIO.SecretKey,
+		UseSSL:          config.MinIO.UseSSL,
+		BucketLookup:    pkgminio.BucketLookupAuto,
+	}
+
+	minioClient, err := pkgminio.NewClient(minioCfg, log)
 	if err != nil {
 		return nil, err
 	}
@@ -128,7 +168,7 @@ func initMinIO(config *conf.Config) (*minio.Client, error) {
 	}
 
 	if !exists {
-		err = minioClient.MakeBucket(ctx, config.MinIO.Bucket, minio.MakeBucketOptions{})
+		err = minioClient.MakeBucket(ctx, config.MinIO.Bucket, pkgminio.MakeBucketOptions{})
 		if err != nil {
 			return nil, err
 		}
@@ -137,9 +177,12 @@ func initMinIO(config *conf.Config) (*minio.Client, error) {
 	return minioClient, nil
 }
 
-func initMilvus(config *conf.Config) (client.Client, error) {
+func initMilvus(config *conf.Config, log *pkglogger.Logger) (*pkgmilvus.Client, error) {
 	addr := fmt.Sprintf("%s:%d", config.Milvus.Host, config.Milvus.Port)
-	return client.NewClient(context.Background(), client.Config{
-		Address: addr,
-	})
+	milvusCfg := &pkgmilvus.Config{
+		Address:  addr,
+		Database: "default",
+	}
+
+	return pkgmilvus.New(context.Background(), milvusCfg, log)
 }

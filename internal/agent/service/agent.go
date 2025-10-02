@@ -1,190 +1,254 @@
 package service
 
 import (
-	"net/http"
-
-	"github.com/lk2023060901/ai-writer-backend/internal/agent/biz"
-	"github.com/lk2023060901/ai-writer-backend/internal/agent/types"
+	"errors"
+	"math"
 
 	"github.com/gin-gonic/gin"
+	"github.com/lk2023060901/ai-writer-backend/internal/agent/biz"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/response"
+	"go.uber.org/zap"
 )
 
-// AgentService handles HTTP requests for agent operations
+// AgentService Agent HTTP 服务
 type AgentService struct {
-	useCase *biz.AgentUseCase
+	uc     *biz.AgentUseCase
+	logger *logger.Logger
 }
 
-// NewAgentService creates a new agent service
-func NewAgentService(useCase *biz.AgentUseCase) *AgentService {
+// NewAgentService 创建 Agent 服务
+func NewAgentService(uc *biz.AgentUseCase, logger *logger.Logger) *AgentService {
 	return &AgentService{
-		useCase: useCase,
+		uc:     uc,
+		logger: logger,
 	}
 }
 
-// RegisterRoutes registers agent routes
-func (s *AgentService) RegisterRoutes(r *gin.RouterGroup) {
-	agents := r.Group("/agents")
-	{
-		agents.POST("", s.CreateAgent)
-		agents.GET("", s.ListAgents)
-		agents.GET("/:id", s.GetAgent)
-		agents.PUT("/:id", s.UpdateAgent)
-		agents.DELETE("/:id", s.DeleteAgent)
-		agents.GET("/groups", s.ListGroups)
-		agents.GET("/group/:name", s.ListByGroup)
-	}
-}
-
-// CreateAgent creates a new agent
-// @Summary Create agent
-// @Tags agents
-// @Accept json
-// @Produce json
-// @Param request body biz.CreateAgentRequest true "Create Agent Request"
-// @Success 200 {object} types.Agent
-// @Router /api/v1/agents [post]
+// CreateAgent 创建智能体
 func (s *AgentService) CreateAgent(c *gin.Context) {
-	var req biz.CreateAgentRequest
+	var req CreateAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
-	agent, err := s.useCase.CreateAgent(c.Request.Context(), &req)
+	userID := c.GetString("user_id")
+	if userID == "" {
+		response.Unauthorized(c, "unauthorized")
+		return
+	}
+
+	agent, err := s.uc.CreateAgent(
+		c.Request.Context(),
+		userID,
+		req.Name,
+		req.Emoji,
+		req.Prompt,
+		req.KnowledgeBaseIDs,
+		req.Tags,
+	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		s.handleError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, agent)
+	response.Created(c, toAgentResponse(agent))
 }
 
-// GetAgent retrieves an agent by ID
-// @Summary Get agent
-// @Tags agents
-// @Produce json
-// @Param id path string true "Agent ID"
-// @Success 200 {object} types.Agent
-// @Router /api/v1/agents/{id} [get]
+// GetAgent 获取智能体详情
 func (s *AgentService) GetAgent(c *gin.Context) {
 	id := c.Param("id")
+	userID := c.GetString("user_id")
 
-	agent, err := s.useCase.GetAgent(c.Request.Context(), id)
+	agent, err := s.uc.GetAgent(c.Request.Context(), id, userID)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		s.handleError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, agent)
+	response.Success(c, toAgentResponse(agent))
 }
 
-// ListAgents lists all agents with optional filtering
-// @Summary List agents
-// @Tags agents
-// @Produce json
-// @Param group query string false "Filter by group"
-// @Param is_builtin query boolean false "Filter by builtin status"
-// @Param keyword query string false "Search keyword"
-// @Success 200 {array} types.Agent
-// @Router /api/v1/agents [get]
+// ListAgents 获取智能体列表
 func (s *AgentService) ListAgents(c *gin.Context) {
-	var filter types.AgentFilter
-
-	if group := c.Query("group"); group != "" {
-		filter.Group = group
-	}
-	if keyword := c.Query("keyword"); keyword != "" {
-		filter.Keyword = keyword
-	}
-	if isBuiltin := c.Query("is_builtin"); isBuiltin != "" {
-		builtin := isBuiltin == "true"
-		filter.IsBuiltin = &builtin
-	}
-
-	agents, err := s.useCase.ListAgents(c.Request.Context(), &filter)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	var req ListAgentsRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, agents)
+	// 默认值
+	if req.Page == 0 {
+		req.Page = 1
+	}
+	if req.PageSize == 0 {
+		req.PageSize = 20
+	}
+
+	userID := c.GetString("user_id")
+
+	bizReq := &biz.ListAgentsRequest{
+		UserID:    userID,
+		Page:      req.Page,
+		PageSize:  req.PageSize,
+		IsEnabled: req.IsEnabled,
+		Tags:      req.Tags,
+		Keyword:   req.Keyword,
+	}
+
+	agents, total, err := s.uc.ListAgents(c.Request.Context(), bizReq)
+	if err != nil {
+		s.logger.Error("failed to list agents", zap.Error(err))
+		response.InternalError(c, "failed to list agents")
+		return
+	}
+
+	response.Success(c, toListAgentsResponse(agents, total, req.Page, req.PageSize))
 }
 
-// UpdateAgent updates an existing agent
-// @Summary Update agent
-// @Tags agents
-// @Accept json
-// @Produce json
-// @Param id path string true "Agent ID"
-// @Param request body biz.UpdateAgentRequest true "Update Agent Request"
-// @Success 200 {object} types.Agent
-// @Router /api/v1/agents/{id} [put]
+// UpdateAgent 更新智能体
 func (s *AgentService) UpdateAgent(c *gin.Context) {
 	id := c.Param("id")
+	userID := c.GetString("user_id")
 
-	var req biz.UpdateAgentRequest
+	var req UpdateAgentRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
-	agent, err := s.useCase.UpdateAgent(c.Request.Context(), id, &req)
+	agent, err := s.uc.UpdateAgent(
+		c.Request.Context(),
+		id,
+		userID,
+		req.Name,
+		req.Emoji,
+		req.Prompt,
+		req.KnowledgeBaseIDs,
+		req.Tags,
+	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		s.handleError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, agent)
+	response.Success(c, toAgentResponse(agent))
 }
 
-// DeleteAgent deletes an agent
-// @Summary Delete agent
-// @Tags agents
-// @Param id path string true "Agent ID"
-// @Success 200 {object} map[string]string
-// @Router /api/v1/agents/{id} [delete]
+// DeleteAgent 删除智能体
 func (s *AgentService) DeleteAgent(c *gin.Context) {
 	id := c.Param("id")
+	userID := c.GetString("user_id")
 
-	if err := s.useCase.DeleteAgent(c.Request.Context(), id); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	err := s.uc.DeleteAgent(c.Request.Context(), id, userID)
+	if err != nil {
+		s.handleError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Agent deleted successfully"})
+	response.SuccessWithMessage(c, "agent deleted successfully", nil)
 }
 
-// ListGroups lists all agent groups
-// @Summary List agent groups
-// @Tags agents
-// @Produce json
-// @Success 200 {array} types.AgentGroup
-// @Router /api/v1/agents/groups [get]
-func (s *AgentService) ListGroups(c *gin.Context) {
-	groups, err := s.useCase.ListGroups(c.Request.Context())
+// EnableAgent 启用智能体
+func (s *AgentService) EnableAgent(c *gin.Context) {
+	id := c.Param("id")
+	userID := c.GetString("user_id")
+
+	err := s.uc.EnableAgent(c.Request.Context(), id, userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		s.handleError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, groups)
+	response.Success(c, nil)
 }
 
-// ListByGroup lists agents in a specific group
-// @Summary List agents by group
-// @Tags agents
-// @Produce json
-// @Param name path string true "Group Name"
-// @Success 200 {array} types.Agent
-// @Router /api/v1/agents/group/{name} [get]
-func (s *AgentService) ListByGroup(c *gin.Context) {
-	groupName := c.Param("name")
+// DisableAgent 禁用智能体
+func (s *AgentService) DisableAgent(c *gin.Context) {
+	id := c.Param("id")
+	userID := c.GetString("user_id")
 
-	agents, err := s.useCase.ListByGroup(c.Request.Context(), groupName)
+	err := s.uc.DisableAgent(c.Request.Context(), id, userID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		s.handleError(c, err)
 		return
 	}
 
-	c.JSON(http.StatusOK, agents)
+	response.Success(c, nil)
+}
+
+// handleError 统一错误处理
+func (s *AgentService) handleError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, biz.ErrAgentNameRequired):
+		response.BadRequest(c, "agent name is required")
+	case errors.Is(err, biz.ErrAgentPromptRequired):
+		response.BadRequest(c, "agent prompt is required")
+	case errors.Is(err, biz.ErrAgentPromptTooShort):
+		response.BadRequest(c, "agent prompt must be at least 10 characters")
+	case errors.Is(err, biz.ErrAgentNotFound):
+		response.NotFound(c, "agent not found")
+	case errors.Is(err, biz.ErrAgentUnauthorized):
+		response.Forbidden(c, "unauthorized to access this agent")
+	case errors.Is(err, biz.ErrAgentTagsInvalid):
+		response.BadRequest(c, "agent tags invalid")
+	case errors.Is(err, biz.ErrAgentKnowledgeBaseInvalid):
+		response.BadRequest(c, "knowledge base id invalid")
+	default:
+		s.logger.Error("internal error", zap.Error(err))
+		response.InternalError(c, "internal server error")
+	}
+}
+
+// toAgentResponse 转换为响应对象
+func toAgentResponse(agent *biz.Agent) *AgentResponse {
+	// 官方智能体：仅返回公开信息
+	if agent.Type == "official" {
+		return &AgentResponse{
+			ID:               agent.ID,
+			Name:             agent.Name,
+			Emoji:            agent.Emoji,
+			Tags:             agent.Tags,
+			KnowledgeBaseIDs: agent.KnowledgeBaseIDs,
+			IsOfficial:       true,
+			IsEnabled:        agent.IsEnabled,
+		}
+	}
+
+	// 用户智能体：返回完整信息
+	return &AgentResponse{
+		ID:               agent.ID,
+		Name:             agent.Name,
+		Emoji:            agent.Emoji,
+		Tags:             agent.Tags,
+		KnowledgeBaseIDs: agent.KnowledgeBaseIDs,
+		IsOfficial:       false,
+		IsEnabled:        agent.IsEnabled,
+		OwnerID:          &agent.OwnerID,
+		Prompt:           &agent.Prompt,
+		Type:             &agent.Type,
+		CreatedAt:        &agent.CreatedAt,
+		UpdatedAt:        &agent.UpdatedAt,
+	}
+}
+
+// toListAgentsResponse 转换列表响应
+func toListAgentsResponse(agents []*biz.Agent, total int64, page int, pageSize int) *ListAgentsResponse {
+	items := make([]*AgentResponse, len(agents))
+	for i, agent := range agents {
+		items[i] = toAgentResponse(agent)
+	}
+
+	totalPages := int(math.Ceil(float64(total) / float64(pageSize)))
+
+	return &ListAgentsResponse{
+		Items: items,
+		Pagination: &PaginationResponse{
+			Page:       page,
+			PageSize:   pageSize,
+			Total:      int(total),
+			TotalPages: totalPages,
+		},
+	}
 }

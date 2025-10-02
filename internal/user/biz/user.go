@@ -7,7 +7,7 @@ import (
 
 // User represents the domain model
 type User struct {
-	ID        int64
+	ID        string
 	Name      string
 	Email     string
 	CreatedAt time.Time
@@ -17,10 +17,10 @@ type User struct {
 // UserRepo defines the interface for user data operations
 type UserRepo interface {
 	Create(ctx context.Context, user *User) error
-	GetByID(ctx context.Context, id int64) (*User, error)
+	GetByID(ctx context.Context, id string) (*User, error)
 	List(ctx context.Context, offset, limit int) ([]*User, error)
 	Update(ctx context.Context, user *User) error
-	Delete(ctx context.Context, id int64) error
+	Delete(ctx context.Context, id string) error
 }
 
 // UserUseCase contains business logic for user operations
@@ -47,7 +47,7 @@ func (uc *UserUseCase) CreateUser(ctx context.Context, name, email string) (*Use
 	return user, nil
 }
 
-func (uc *UserUseCase) GetUser(ctx context.Context, id int64) (*User, error) {
+func (uc *UserUseCase) GetUser(ctx context.Context, id string) (*User, error) {
 	return uc.repo.GetByID(ctx, id)
 }
 
@@ -61,6 +61,6 @@ func (uc *UserUseCase) UpdateUser(ctx context.Context, user *User) error {
 	return uc.repo.Update(ctx, user)
 }
 
-func (uc *UserUseCase) DeleteUser(ctx context.Context, id int64) error {
+func (uc *UserUseCase) DeleteUser(ctx context.Context, id string) error {
 	return uc.repo.Delete(ctx, id)
 }

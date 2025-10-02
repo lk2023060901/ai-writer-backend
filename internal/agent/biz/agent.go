@@ -2,200 +2,197 @@ package biz
 
 import (
 	"context"
-	"fmt"
 	"time"
-
-	"github.com/lk2023060901/ai-writer-backend/internal/agent/types"
 
 	"github.com/google/uuid"
 )
 
-// AgentRepo defines the repository interface for agent data operations
+// SystemOwnerID 系统所有者 ID，用于标识官方智能体
+const SystemOwnerID = "00000000-0000-0000-0000-000000000000"
+
+// Agent 智能体业务模型（用户智能体和官方智能体共用）
+type Agent struct {
+	ID               string    // UUID v7
+	OwnerID          string    // 所有者 UUID（官方智能体为 SystemOwnerID）
+	Name             string    // 智能体名称
+	Emoji            string    // emoji 图标
+	Prompt           string    // 提示词
+	KnowledgeBaseIDs []string  // 关联的知识库 UUID 数组
+	Tags             []string  // 标签数组
+	Type             string    // 类型（固定为 'agent'）
+	IsEnabled        bool      // 是否启用
+	CreatedAt        time.Time // 创建时间
+	UpdatedAt        time.Time // 更新时间
+}
+
+// IsOfficial 判断是否为官方智能体
+func (a *Agent) IsOfficial() bool {
+	return a.OwnerID == SystemOwnerID
+}
+
+// ListAgentsRequest 列表查询请求
+type ListAgentsRequest struct {
+	UserID    string   // 当前用户 ID
+	Page      int      // 页码
+	PageSize  int      // 每页数量
+	IsEnabled *bool    // 启用状态过滤（可选）
+	Tags      []string // 标签过滤（可选）
+	Keyword   string   // 关键词搜索（可选）
+}
+
+// AgentRepo 用户智能体仓储接口
 type AgentRepo interface {
-	Create(ctx context.Context, agent *types.Agent) error
-	GetByID(ctx context.Context, id string) (*types.Agent, error)
-	List(ctx context.Context, filter *types.AgentFilter) ([]*types.Agent, error)
-	Update(ctx context.Context, agent *types.Agent) error
-	Delete(ctx context.Context, id string) error
-	ListGroups(ctx context.Context) ([]*types.AgentGroup, error)
+	Create(ctx context.Context, agent *Agent) error
+	GetByID(ctx context.Context, id string, ownerID string) (*Agent, error)
+	List(ctx context.Context, req *ListAgentsRequest) ([]*Agent, int64, error)
+	Update(ctx context.Context, agent *Agent) error
+	Delete(ctx context.Context, id string, ownerID string) error
+	UpdateEnabled(ctx context.Context, id string, ownerID string, enabled bool) error
 }
 
-// AgentUseCase contains business logic for agent operations
+// OfficialAgentRepo 官方智能体仓储接口
+type OfficialAgentRepo interface {
+	GetByID(ctx context.Context, id string) (*Agent, error)
+	List(ctx context.Context, req *ListAgentsRequest) ([]*Agent, int64, error)
+}
+
+// AgentUseCase 智能体业务逻辑
 type AgentUseCase struct {
-	repo AgentRepo
+	agentRepo         AgentRepo
+	officialAgentRepo OfficialAgentRepo
 }
 
-// NewAgentUseCase creates a new agent use case
-func NewAgentUseCase(repo AgentRepo) *AgentUseCase {
+// NewAgentUseCase 创建智能体用例
+func NewAgentUseCase(agentRepo AgentRepo, officialAgentRepo OfficialAgentRepo) *AgentUseCase {
 	return &AgentUseCase{
-		repo: repo,
+		agentRepo:         agentRepo,
+		officialAgentRepo: officialAgentRepo,
 	}
 }
 
-// CreateAgent creates a new agent
-func (uc *AgentUseCase) CreateAgent(ctx context.Context, req *CreateAgentRequest) (*types.Agent, error) {
-	// Validate request
-	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("invalid request: %w", err)
+// CreateAgent 创建智能体
+func (uc *AgentUseCase) CreateAgent(ctx context.Context, userID string, name string, emoji string, prompt string, knowledgeBaseIDs []string, tags []string) (*Agent, error) {
+	// 验证
+	if name == "" {
+		return nil, ErrAgentNameRequired
+	}
+	if prompt == "" {
+		return nil, ErrAgentPromptRequired
+	}
+	if len(prompt) < 10 {
+		return nil, ErrAgentPromptTooShort
 	}
 
-	agent := &types.Agent{
-		ID:          uuid.New().String(),
-		Name:        req.Name,
-		Description: req.Description,
-		Emoji:       req.Emoji,
-		Prompt:      req.Prompt,
-		Group:       req.Group,
-		Settings:    req.Settings,
-		IsBuiltin:   false, // User-created agents are not builtin
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
+	agent := &Agent{
+		ID:               uuid.Must(uuid.NewV7()).String(),
+		OwnerID:          userID,
+		Name:             name,
+		Emoji:            emoji,
+		Prompt:           prompt,
+		KnowledgeBaseIDs: knowledgeBaseIDs,
+		Tags:             tags,
+		Type:             "agent",
+		IsEnabled:        true,
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
 	}
 
-	if err := uc.repo.Create(ctx, agent); err != nil {
-		return nil, fmt.Errorf("failed to create agent: %w", err)
+	if err := uc.agentRepo.Create(ctx, agent); err != nil {
+		return nil, err
 	}
 
 	return agent, nil
 }
 
-// GetAgent retrieves an agent by ID
-func (uc *AgentUseCase) GetAgent(ctx context.Context, id string) (*types.Agent, error) {
-	if id == "" {
-		return nil, fmt.Errorf("agent ID is required")
+// GetAgent 获取智能体详情（支持用户智能体和官方智能体）
+func (uc *AgentUseCase) GetAgent(ctx context.Context, id string, userID string) (*Agent, error) {
+	// 先尝试从用户智能体查询
+	agent, err := uc.agentRepo.GetByID(ctx, id, userID)
+	if err == nil {
+		return agent, nil
 	}
 
-	agent, err := uc.repo.GetByID(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get agent: %w", err)
+	// 如果不是 NotFound 错误，直接返回
+	if err != ErrAgentNotFound {
+		return nil, err
 	}
 
-	return agent, nil
+	// 从官方智能体查询
+	return uc.officialAgentRepo.GetByID(ctx, id)
 }
 
-// ListAgents lists agents with optional filtering
-func (uc *AgentUseCase) ListAgents(ctx context.Context, filter *types.AgentFilter) ([]*types.Agent, error) {
-	agents, err := uc.repo.List(ctx, filter)
+// ListAgents 获取智能体列表（包含官方智能体 + 用户自己创建的）
+func (uc *AgentUseCase) ListAgents(ctx context.Context, req *ListAgentsRequest) ([]*Agent, int64, error) {
+	// 查询用户智能体
+	userAgents, userTotal, err := uc.agentRepo.List(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list agents: %w", err)
+		return nil, 0, err
 	}
 
-	return agents, nil
+	// 查询官方智能体
+	officialAgents, officialTotal, err := uc.officialAgentRepo.List(ctx, req)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 合并结果（官方智能体在前）
+	allAgents := append(officialAgents, userAgents...)
+	totalCount := officialTotal + userTotal
+
+	return allAgents, totalCount, nil
 }
 
-// UpdateAgent updates an existing agent
-func (uc *AgentUseCase) UpdateAgent(ctx context.Context, id string, req *UpdateAgentRequest) (*types.Agent, error) {
-	// Get existing agent
-	agent, err := uc.repo.GetByID(ctx, id)
+// UpdateAgent 更新智能体（仅用户自己创建的）
+func (uc *AgentUseCase) UpdateAgent(ctx context.Context, id string, userID string, name *string, emoji *string, prompt *string, knowledgeBaseIDs []string, tags []string) (*Agent, error) {
+	// 获取现有智能体
+	agent, err := uc.agentRepo.GetByID(ctx, id, userID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get agent: %w", err)
+		return nil, err
 	}
 
-	// Don't allow updating builtin agents
-	if agent.IsBuiltin {
-		return nil, fmt.Errorf("cannot update builtin agent")
+	// 更新字段
+	if name != nil && *name != "" {
+		agent.Name = *name
 	}
-
-	// Update fields
-	if req.Name != "" {
-		agent.Name = req.Name
+	if emoji != nil {
+		agent.Emoji = *emoji
 	}
-	if req.Description != "" {
-		agent.Description = req.Description
+	if prompt != nil {
+		if *prompt == "" {
+			return nil, ErrAgentPromptRequired
+		}
+		if len(*prompt) < 10 {
+			return nil, ErrAgentPromptTooShort
+		}
+		agent.Prompt = *prompt
 	}
-	if req.Emoji != "" {
-		agent.Emoji = req.Emoji
+	if knowledgeBaseIDs != nil {
+		agent.KnowledgeBaseIDs = knowledgeBaseIDs
 	}
-	if req.Prompt != "" {
-		agent.Prompt = req.Prompt
-	}
-	if len(req.Group) > 0 {
-		agent.Group = req.Group
-	}
-	if req.Settings != nil {
-		agent.Settings = req.Settings
+	if tags != nil {
+		agent.Tags = tags
 	}
 
 	agent.UpdatedAt = time.Now()
 
-	if err := uc.repo.Update(ctx, agent); err != nil {
-		return nil, fmt.Errorf("failed to update agent: %w", err)
+	if err := uc.agentRepo.Update(ctx, agent); err != nil {
+		return nil, err
 	}
 
 	return agent, nil
 }
 
-// DeleteAgent deletes an agent by ID
-func (uc *AgentUseCase) DeleteAgent(ctx context.Context, id string) error {
-	// Get agent to check if it's builtin
-	agent, err := uc.repo.GetByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("failed to get agent: %w", err)
-	}
-
-	// Don't allow deleting builtin agents
-	if agent.IsBuiltin {
-		return fmt.Errorf("cannot delete builtin agent")
-	}
-
-	if err := uc.repo.Delete(ctx, id); err != nil {
-		return fmt.Errorf("failed to delete agent: %w", err)
-	}
-
-	return nil
+// DeleteAgent 删除智能体（仅用户自己创建的）
+func (uc *AgentUseCase) DeleteAgent(ctx context.Context, id string, userID string) error {
+	return uc.agentRepo.Delete(ctx, id, userID)
 }
 
-// ListGroups returns all agent groups with counts
-func (uc *AgentUseCase) ListGroups(ctx context.Context) ([]*types.AgentGroup, error) {
-	groups, err := uc.repo.ListGroups(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list groups: %w", err)
-	}
-
-	return groups, nil
+// EnableAgent 启用智能体
+func (uc *AgentUseCase) EnableAgent(ctx context.Context, id string, userID string) error {
+	return uc.agentRepo.UpdateEnabled(ctx, id, userID, true)
 }
 
-// ListByGroup lists agents in a specific group
-func (uc *AgentUseCase) ListByGroup(ctx context.Context, groupName string) ([]*types.Agent, error) {
-	filter := &types.AgentFilter{
-		Group: groupName,
-	}
-
-	agents, err := uc.repo.List(ctx, filter)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list agents by group: %w", err)
-	}
-
-	return agents, nil
-}
-
-// CreateAgentRequest represents a request to create an agent
-type CreateAgentRequest struct {
-	Name        string               `json:"name" binding:"required"`
-	Description string               `json:"description"`
-	Emoji       string               `json:"emoji"`
-	Prompt      string               `json:"prompt" binding:"required"`
-	Group       []string             `json:"group"`
-	Settings    *types.AgentSettings `json:"settings"`
-}
-
-// Validate validates the create agent request
-func (r *CreateAgentRequest) Validate() error {
-	if r.Name == "" {
-		return fmt.Errorf("name is required")
-	}
-	if r.Prompt == "" {
-		return fmt.Errorf("prompt is required")
-	}
-	return nil
-}
-
-// UpdateAgentRequest represents a request to update an agent
-type UpdateAgentRequest struct {
-	Name        string               `json:"name"`
-	Description string               `json:"description"`
-	Emoji       string               `json:"emoji"`
-	Prompt      string               `json:"prompt"`
-	Group       []string             `json:"group"`
-	Settings    *types.AgentSettings `json:"settings"`
+// DisableAgent 禁用智能体
+func (uc *AgentUseCase) DisableAgent(ctx context.Context, id string, userID string) error {
+	return uc.agentRepo.UpdateEnabled(ctx, id, userID, false)
 }

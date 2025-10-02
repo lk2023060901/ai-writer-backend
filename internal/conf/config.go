@@ -15,11 +15,13 @@ type Config struct {
 	Milvus    MilvusConfig
 	Log       LogConfig
 	MinerU    MinerUConfig
+	Auth      AuthConfig
 }
 
 type ServerConfig struct {
-	Host string
-	Port int
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	GRPCPort int    `mapstructure:"grpc_port"`
 }
 
 type DatabaseConfig struct {
@@ -77,6 +79,13 @@ type MinerUConfig struct {
 	EnableFormula   bool          `mapstructure:"enable_formula"`
 	EnableTable     bool          `mapstructure:"enable_table"`
 	ModelVersion    string        `mapstructure:"model_version"`
+}
+
+type AuthConfig struct {
+	JWTSecret   string `mapstructure:"jwt_secret"`
+	JWTIssuer   string `mapstructure:"jwt_issuer"`
+	TOTPIssuer  string `mapstructure:"totp_issuer"`
+	BackupCodes int    `mapstructure:"backup_codes"`
 }
 
 func LoadConfig(path string) (*Config, error) {
