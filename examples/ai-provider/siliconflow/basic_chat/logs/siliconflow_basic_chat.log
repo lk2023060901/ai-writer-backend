@@ -1,0 +1,5 @@
+{"level":"info","time":"2025-10-02T00:33:31.225+0800","caller":"basic_chat/main.go:25","msg":"SiliconFlow 基本聊天示例启动"}
+{"level":"info","time":"2025-10-02T00:33:31.225+0800","caller":"basic_chat/main.go:43","msg":"发送请求","provider":"siliconflow","message":"你好！请用中文介绍一下你自己。"}
+{"level":"info","time":"2025-10-02T00:33:34.607+0800","caller":"basic_chat/main.go:67","msg":"收到响应","provider":"siliconflow","id":"0199a09f3170a95d4f0c225a482ffb8a","model":"Qwen/Qwen2.5-7B-Instruct","response":"你好！我叫Qwen，是由阿里云开发的大型语言模型。我的主要功能是生成与给定文本相关的高质量回复，来帮助用户解决问题、创作文字或是提供信息。我能够用多种语言进行交流，致力于为用户提供准确、有用的信息。虽然我拥有大量的知识和信息，但我并不是真正的专家，所以在处理复杂问题或专业领域的问题时，可能需要用户提供更多的上下文或寻求专业来源的帮助。如果你有任何问题或需要帮助，欢迎随时","prompt_tokens":37,"completion_tokens":100,"total_tokens":137}
+{"level":"info","time":"2025-10-02T01:49:42.722+0800","caller":"basic_chat/main.go:26","msg":"SiliconFlow 基本聊天示例启动"}
+{"level":"info","time":"2025-10-02T01:49:42.723+0800","caller":"basic_chat/main.go:44","msg":"发送请求","provider":"siliconflow","message":"你好！请用中文介绍一下你自己。"}

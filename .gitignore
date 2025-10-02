@@ -30,3 +30,15 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Build outputs and binaries
+agent-assistant
+basic_chat
+migrate
+streaming_chat
+/cmd/*/main
+/examples/*/*/main
+
+# Logs
+logs/
+*.log
