@@ -11,6 +11,9 @@ import (
 	agentbiz "github.com/lk2023060901/ai-writer-backend/internal/agent/biz"
 	agentdata "github.com/lk2023060901/ai-writer-backend/internal/agent/data"
 	agentservice "github.com/lk2023060901/ai-writer-backend/internal/agent/service"
+	assistantbiz "github.com/lk2023060901/ai-writer-backend/internal/assistant/biz"
+	assistantdata "github.com/lk2023060901/ai-writer-backend/internal/assistant/data"
+	assistantservice "github.com/lk2023060901/ai-writer-backend/internal/assistant/service"
 	authbiz "github.com/lk2023060901/ai-writer-backend/internal/auth/biz"
 	authdata "github.com/lk2023060901/ai-writer-backend/internal/auth/data"
 	authservice "github.com/lk2023060901/ai-writer-backend/internal/auth/service"
@@ -69,6 +72,8 @@ var repositoryProviderSet = wire.NewSet(
 	provideKnowledgeBaseRepo,
 	provideDocumentRepo,
 	provideChunkRepo,
+	provideTopicRepo,
+	provideMessageRepo,
 )
 
 // Use case providers
@@ -80,6 +85,8 @@ var useCaseProviderSet = wire.NewSet(
 	kbbiz.NewAIProviderConfigUseCase,
 	kbbiz.NewKnowledgeBaseUseCase,
 	kbbiz.NewDocumentUseCase,
+	assistantbiz.NewTopicUseCase,
+	assistantbiz.NewMessageUseCase,
 )
 
 // Service providers
@@ -99,6 +106,8 @@ var httpServiceProviderSet = wire.NewSet(
 	kbservice.NewAIProviderService,
 	kbservice.NewKnowledgeBaseService,
 	kbservice.NewDocumentService,
+	assistantservice.NewTopicService,
+	assistantservice.NewMessageService,
 )
 
 // Server providers
@@ -209,6 +218,14 @@ func provideDocumentRepo(d *data.Data) kbbiz.DocumentRepo {
 
 func provideChunkRepo(d *data.Data) kbbiz.ChunkRepo {
 	return kbdata.NewChunkRepo(d.DBWrapper)
+}
+
+func provideTopicRepo(d *data.Data) assistantbiz.TopicRepo {
+	return assistantdata.NewTopicRepo(d.DBWrapper)
+}
+
+func provideMessageRepo(d *data.Data) assistantbiz.MessageRepo {
+	return assistantdata.NewMessageRepo(d.DBWrapper)
 }
 
 // Service providers

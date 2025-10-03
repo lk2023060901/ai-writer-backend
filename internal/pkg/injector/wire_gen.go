@@ -13,7 +13,10 @@ import (
 	biz2 "github.com/lk2023060901/ai-writer-backend/internal/agent/biz"
 	data5 "github.com/lk2023060901/ai-writer-backend/internal/agent/data"
 	service3 "github.com/lk2023060901/ai-writer-backend/internal/agent/service"
-	biz4 "github.com/lk2023060901/ai-writer-backend/internal/auth/biz"
+	biz4 "github.com/lk2023060901/ai-writer-backend/internal/assistant/biz"
+	data6 "github.com/lk2023060901/ai-writer-backend/internal/assistant/data"
+	service5 "github.com/lk2023060901/ai-writer-backend/internal/assistant/service"
+	biz5 "github.com/lk2023060901/ai-writer-backend/internal/auth/biz"
 	data4 "github.com/lk2023060901/ai-writer-backend/internal/auth/data"
 	service2 "github.com/lk2023060901/ai-writer-backend/internal/auth/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/conf"
@@ -72,8 +75,14 @@ func InitializeApp(config *conf.Config, log *logger.Logger) (*App, func(), error
 		return nil, nil, err
 	}
 	documentService := service4.NewDocumentService(documentUseCase, worker, zapLogger)
+	topicRepo := provideTopicRepo(data)
+	topicUseCase := biz4.NewTopicUseCase(topicRepo)
+	topicService := service5.NewTopicService(topicUseCase)
+	messageRepo := provideMessageRepo(data)
+	messageUseCase := biz4.NewMessageUseCase(messageRepo, topicRepo)
+	messageService := service5.NewMessageService(messageUseCase)
 	client := provideRedisClient(data)
-	httpServer := server.NewHTTPServer(config, log, userService, authService, agentService, aiProviderService, knowledgeBaseService, documentService, client)
+	httpServer := server.NewHTTPServer(config, log, userService, authService, agentService, aiProviderService, knowledgeBaseService, documentService, topicService, messageService, client)
 	authServiceServer := provideGRPCAuthService(authUseCase, log)
 	grpcServer := server.NewGRPCServer(config, log, authServiceServer)
 	app, cleanup2 := newApp(config, log, httpServer, grpcServer, worker)
@@ -118,11 +127,13 @@ var repositoryProviderSet = wire.NewSet(
 	provideKnowledgeBaseRepo,
 	provideDocumentRepo,
 	provideChunkRepo,
+	provideTopicRepo,
+	provideMessageRepo,
 )
 
 // Use case providers
 var useCaseProviderSet = wire.NewSet(
-	provideZapLogger, biz.NewUserUseCase, provideAuthUseCase, biz2.NewAgentUseCase, biz3.NewAIProviderConfigUseCase, biz3.NewKnowledgeBaseUseCase, biz3.NewDocumentUseCase,
+	provideZapLogger, biz.NewUserUseCase, provideAuthUseCase, biz2.NewAgentUseCase, biz3.NewAIProviderConfigUseCase, biz3.NewKnowledgeBaseUseCase, biz3.NewDocumentUseCase, biz4.NewTopicUseCase, biz4.NewMessageUseCase,
 )
 
 // Service providers
@@ -134,17 +145,17 @@ var serviceProviderSet = wire.NewSet(
 )
 
 // HTTP/gRPC service providers
-var httpServiceProviderSet = wire.NewSet(service.NewUserService, service2.NewAuthService, provideGRPCAuthService, service3.NewAgentService, service4.NewAIProviderService, service4.NewKnowledgeBaseService, service4.NewDocumentService)
+var httpServiceProviderSet = wire.NewSet(service.NewUserService, service2.NewAuthService, provideGRPCAuthService, service3.NewAgentService, service4.NewAIProviderService, service4.NewKnowledgeBaseService, service4.NewDocumentService, service5.NewTopicService, service5.NewMessageService)
 
 // Server providers
 var serverProviderSet = wire.NewSet(server.NewHTTPServer, server.NewGRPCServer, provideDocumentWorkerWithStart)
 
 func provideAuthUseCase(
-	userRepo biz4.UserRepo,
-	pendingRepo biz4.PendingAuthRepo,
+	userRepo biz5.UserRepo,
+	pendingRepo biz5.PendingAuthRepo,
 	config *conf.Config,
-) *biz4.AuthUseCase {
-	return biz4.NewAuthUseCase(
+) *biz5.AuthUseCase {
+	return biz5.NewAuthUseCase(
 		userRepo,
 		pendingRepo,
 		config.Auth.JWTSecret,
@@ -176,7 +187,7 @@ func provideDocumentWorkerWithStart(
 }
 
 func provideGRPCAuthService(
-	authUC *biz4.AuthUseCase,
+	authUC *biz5.AuthUseCase,
 	log *logger.Logger,
 ) authv1.AuthServiceServer {
 	return service2.NewGRPCAuthService(authUC, log)
@@ -198,12 +209,12 @@ func provideUserRepo(d *data.Data) biz.UserRepo {
 	return data3.NewUserRepo(d.DB)
 }
 
-func provideAuthUserRepo(d *data.Data) biz4.UserRepo {
+func provideAuthUserRepo(d *data.Data) biz5.UserRepo {
 	return data4.NewAuthUserRepo(d.DBWrapper)
 }
 
-func providePendingAuthRepo(d *data.Data) biz4.PendingAuthRepo {
-	return biz4.NewRedisPendingAuthRepo(d.RedisClient)
+func providePendingAuthRepo(d *data.Data) biz5.PendingAuthRepo {
+	return biz5.NewRedisPendingAuthRepo(d.RedisClient)
 }
 
 func provideAgentRepo(d *data.Data) biz2.AgentRepo {
@@ -228,6 +239,14 @@ func provideDocumentRepo(d *data.Data) biz3.DocumentRepo {
 
 func provideChunkRepo(d *data.Data) biz3.ChunkRepo {
 	return data2.NewChunkRepo(d.DBWrapper)
+}
+
+func provideTopicRepo(d *data.Data) biz4.TopicRepo {
+	return data6.NewTopicRepo(d.DBWrapper)
+}
+
+func provideMessageRepo(d *data.Data) biz4.MessageRepo {
+	return data6.NewMessageRepo(d.DBWrapper)
 }
 
 func provideEmbeddingService() biz3.EmbeddingService {

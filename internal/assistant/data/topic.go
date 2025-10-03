@@ -6,17 +6,16 @@ import (
 
 	"github.com/lk2023060901/ai-writer-backend/internal/assistant/models"
 	"github.com/lk2023060901/ai-writer-backend/internal/assistant/types"
-
-	"gorm.io/gorm"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/database"
 )
 
-// TopicRepo implements the topic repository using GORM
+// TopicRepo implements the topic repository using database wrapper
 type TopicRepo struct {
-	db *gorm.DB
+	db *database.DB
 }
 
 // NewTopicRepo creates a new topic repository
-func NewTopicRepo(db *gorm.DB) *TopicRepo {
+func NewTopicRepo(db *database.DB) *TopicRepo {
 	return &TopicRepo{db: db}
 }
 
@@ -33,7 +32,7 @@ func (r *TopicRepo) Create(ctx context.Context, topic *types.Topic) error {
 func (r *TopicRepo) GetByID(ctx context.Context, id string) (*types.Topic, error) {
 	var model models.Topic
 	if err := r.db.WithContext(ctx).Where("id = ?", id).First(&model).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if database.IsRecordNotFoundError(err) {
 			return nil, fmt.Errorf("topic not found")
 		}
 		return nil, fmt.Errorf("failed to get topic: %w", err)

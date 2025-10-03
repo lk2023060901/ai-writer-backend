@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	agentservice "github.com/lk2023060901/ai-writer-backend/internal/agent/service"
+	assistantservice "github.com/lk2023060901/ai-writer-backend/internal/assistant/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/auth/middleware"
 	authservice "github.com/lk2023060901/ai-writer-backend/internal/auth/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/conf"
@@ -27,6 +28,8 @@ type HTTPServer struct {
 	aiConfigService *kbservice.AIProviderService
 	kbService       *kbservice.KnowledgeBaseService
 	documentService *kbservice.DocumentService
+	topicService    *assistantservice.TopicService
+	messageService  *assistantservice.MessageService
 }
 
 func NewHTTPServer(
@@ -38,6 +41,8 @@ func NewHTTPServer(
 	aiConfigService *kbservice.AIProviderService,
 	kbService *kbservice.KnowledgeBaseService,
 	documentService *kbservice.DocumentService,
+	topicService *assistantservice.TopicService,
+	messageService *assistantservice.MessageService,
 	redisClient *redis.Client,
 ) *HTTPServer {
 	gin.SetMode(gin.ReleaseMode)
@@ -128,6 +133,12 @@ func NewHTTPServer(
 			kbs.POST("/:id/documents/:doc_id/reprocess", documentService.ReprocessDocument)
 			kbs.POST("/:id/search", documentService.SearchDocuments)
 		}
+
+		// Topic routes (protected)
+		topicService.RegisterRoutes(protectedAPI)
+
+		// Message routes (protected)
+		messageService.RegisterRoutes(protectedAPI)
 	}
 
 	addr := fmt.Sprintf("%s:%d", config.Server.Host, config.Server.Port)
@@ -144,6 +155,8 @@ func NewHTTPServer(
 		aiConfigService: aiConfigService,
 		kbService:       kbService,
 		documentService: documentService,
+		topicService:    topicService,
+		messageService:  messageService,
 	}
 }
 
