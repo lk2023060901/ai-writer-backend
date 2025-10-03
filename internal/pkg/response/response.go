@@ -4,11 +4,12 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	apperrors "github.com/lk2023060901/ai-writer-backend/internal/pkg/errors"
 )
 
 // Response 统一响应结构
 type Response struct {
-	Code    int         `json:"code"`              // HTTP 状态码
+	Code    int         `json:"code"`              // 业务错误码（0表示成功）
 	Message string      `json:"message,omitempty"` // 提示信息
 	Data    interface{} `json:"data"`              // 实际数据（可能为空对象 {}）
 }
@@ -19,7 +20,7 @@ func Success(c *gin.Context, data interface{}) {
 		data = struct{}{}
 	}
 	c.JSON(http.StatusOK, Response{
-		Code:    http.StatusOK,
+		Code:    apperrors.Success,
 		Message: "",
 		Data:    data,
 	})
@@ -81,4 +82,34 @@ func NotFound(c *gin.Context, message string) {
 // InternalError 500 错误
 func InternalError(c *gin.Context, message string) {
 	Error(c, http.StatusInternalServerError, message)
+}
+
+// HandleError 统一错误处理（使用AppError）
+func HandleError(c *gin.Context, err error) {
+	if err == nil {
+		return
+	}
+
+	// 提取错误码和详情
+	code := apperrors.ExtractCode(err)
+	httpStatus := apperrors.GetHTTPStatus(code)
+	message := apperrors.FormatError(code, apperrors.GetDetails(err))
+
+	c.JSON(httpStatus, Response{
+		Code:    code,
+		Message: message,
+		Data:    struct{}{},
+	})
+}
+
+// ErrorWithCode 使用错误码的错误响应
+func ErrorWithCode(c *gin.Context, code int, details ...string) {
+	httpStatus := apperrors.GetHTTPStatus(code)
+	message := apperrors.FormatError(code, details...)
+
+	c.JSON(httpStatus, Response{
+		Code:    code,
+		Message: message,
+		Data:    struct{}{},
+	})
 }

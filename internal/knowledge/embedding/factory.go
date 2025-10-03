@@ -4,24 +4,22 @@ import (
 	"fmt"
 
 	kbtypes "github.com/lk2023060901/ai-writer-backend/internal/knowledge/types"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/factory"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
 )
 
 // Factory Embedder 工厂
 type Factory struct {
-	logger *logger.Logger
-	cache  *redis.Client
+	*factory.BaseFactory
+	cache *redis.Client
 }
 
 // NewFactory 创建 Embedder 工厂
 func NewFactory(lgr *logger.Logger, cache *redis.Client) *Factory {
-	if lgr == nil {
-		lgr = logger.L()
-	}
 	return &Factory{
-		logger: lgr,
-		cache:  cache,
+		BaseFactory: factory.NewBaseFactory(lgr),
+		cache:       cache,
 	}
 }
 
@@ -51,10 +49,10 @@ func (f *Factory) CreateEmbedder(cfg *CreateEmbedderConfig) (Embedder, error) {
 			BaseURL:   cfg.BaseURL,
 			Model:     cfg.Model,
 			Dimension: cfg.Dimension,
-		}, f.logger)
+		}, f.Logger())
 
 	case kbtypes.EmbeddingProviderAnthropic:
-		// TODO: 实现 Anthropic Embedder（如果支持）
+		// Note: Anthropic doesn't provide embedding API. Consider using Voyage AI instead.
 		return nil, fmt.Errorf("anthropic embedder not implemented yet")
 
 	default:
@@ -67,7 +65,7 @@ func (f *Factory) CreateEmbedder(cfg *CreateEmbedderConfig) (Embedder, error) {
 
 	// 如果启用缓存，包装为缓存 Embedder
 	if cfg.EnableCache && f.cache != nil {
-		embedder = NewCacheEmbedder(embedder, f.cache, nil, f.logger)
+		embedder = NewCacheEmbedder(embedder, f.cache, nil, f.Logger())
 	}
 
 	return embedder, nil

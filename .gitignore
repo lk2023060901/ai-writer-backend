@@ -43,3 +43,9 @@ streaming_chat
 # Logs
 logs/
 *.log
+
+# Documentation (auto-generated)
+docs/
+
+# Data files
+data/

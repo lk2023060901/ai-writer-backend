@@ -154,10 +154,12 @@ func (c *Client) HybridSearch(ctx context.Context, collectionName string, reques
 		return nil, ErrInvalidSearchRequest
 	}
 
-	c.logger.Info("hybrid search completed",
+	// Note: Hybrid search with multiple vector fields requires advanced reranking strategy
+	// Current implementation uses single vector field. Hybrid search to be implemented in future release.
+
+	c.logger.Info("hybrid search not implemented",
 		zap.String("collection", collectionName),
 		zap.Int("requests", len(requests)))
 
-	// TODO: 实现混合搜索逻辑
 	return nil, ErrNotImplemented
 }

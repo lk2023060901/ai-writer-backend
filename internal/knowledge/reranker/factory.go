@@ -3,21 +3,19 @@ package reranker
 import (
 	"fmt"
 
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/factory"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
 )
 
 // Factory Reranker 工厂
 type Factory struct {
-	logger *logger.Logger
+	*factory.BaseFactory
 }
 
 // NewFactory 创建 Reranker 工厂
 func NewFactory(lgr *logger.Logger) *Factory {
-	if lgr == nil {
-		lgr = logger.L()
-	}
 	return &Factory{
-		logger: lgr,
+		BaseFactory: factory.NewBaseFactory(lgr),
 	}
 }
 
@@ -41,17 +39,17 @@ func (f *Factory) CreateReranker(cfg *CreateRerankerConfig) (Reranker, error) {
 			APIKey:  cfg.APIKey,
 			BaseURL: cfg.BaseURL,
 			Model:   cfg.Model,
-		}, f.logger)
+		}, f.Logger())
 
 	case RerankProviderVoyage:
 		return NewVoyageReranker(&VoyageRerankerConfig{
 			APIKey:  cfg.APIKey,
 			BaseURL: cfg.BaseURL,
 			Model:   cfg.Model,
-		}, f.logger)
+		}, f.Logger())
 
 	case RerankProviderCohere:
-		// TODO: 实现 Cohere Reranker
+		// Cohere Reranker implementation planned for future release
 		return nil, fmt.Errorf("cohere reranker not implemented yet")
 
 	case RerankProviderSiliconFlow:
@@ -59,7 +57,7 @@ func (f *Factory) CreateReranker(cfg *CreateRerankerConfig) (Reranker, error) {
 			APIKey:  cfg.APIKey,
 			BaseURL: cfg.BaseURL,
 			Model:   cfg.Model,
-		}, f.logger)
+		}, f.Logger())
 
 	default:
 		return NewNoOpReranker(), nil

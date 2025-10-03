@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/lk2023060901/ai-writer-backend/internal/assistant/biz"
 	"github.com/lk2023060901/ai-writer-backend/internal/assistant/types"
@@ -48,10 +49,11 @@ func (s *AssistantService) CreateAssistant(c *gin.Context) {
 		return
 	}
 
-	// TODO: Get user ID from context/JWT
+	// Get user ID from JWT middleware (set by auth middleware)
 	userID := c.GetString("user_id")
 	if userID == "" {
-		userID = "default-user" // For testing
+		// Fallback for development/testing without auth
+		userID = "default-user"
 	}
 
 	assistant, err := s.useCase.CreateAssistant(c.Request.Context(), userID, &req)
@@ -107,7 +109,10 @@ func (s *AssistantService) ListAssistants(c *gin.Context) {
 	if keyword := c.Query("keyword"); keyword != "" {
 		filter.Keyword = keyword
 	}
-	// TODO: Parse tags from comma-separated string
+	// Parse tags from comma-separated query parameter
+	if tagsStr := c.Query("tags"); tagsStr != "" {
+		filter.Tags = strings.Split(tagsStr, ",")
+	}
 
 	assistants, err := s.useCase.ListAssistants(c.Request.Context(), userID, &filter)
 	if err != nil {
