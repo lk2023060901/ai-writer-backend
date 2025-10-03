@@ -54,6 +54,13 @@ func (f *Factory) CreateReranker(cfg *CreateRerankerConfig) (Reranker, error) {
 		// TODO: 实现 Cohere Reranker
 		return nil, fmt.Errorf("cohere reranker not implemented yet")
 
+	case RerankProviderSiliconFlow:
+		return NewSiliconFlowReranker(&SiliconFlowRerankerConfig{
+			APIKey:  cfg.APIKey,
+			BaseURL: cfg.BaseURL,
+			Model:   cfg.Model,
+		}, f.logger)
+
 	default:
 		return NewNoOpReranker(), nil
 	}

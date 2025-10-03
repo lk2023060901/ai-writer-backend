@@ -22,6 +22,8 @@ const (
 	RerankProviderVoyage RerankProvider = "voyage"
 	// RerankProviderCohere Cohere Reranker
 	RerankProviderCohere RerankProvider = "cohere"
+	// RerankProviderSiliconFlow SiliconFlow Reranker
+	RerankProviderSiliconFlow RerankProvider = "siliconflow"
 )
 
 // RerankResult 重排序结果

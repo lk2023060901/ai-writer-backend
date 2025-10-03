@@ -1,10 +1,13 @@
 package biz
 
 import (
-	"fmt"
-	"github.com/google/uuid"
 	"context"
+	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // Document 文档模型
@@ -239,13 +242,16 @@ func (uc *DocumentUseCase) ProcessDocument(ctx context.Context, documentID strin
 	// 创建 Chunks
 	chunks := make([]*Chunk, len(chunkTexts))
 	for i, chunkText := range chunkTexts {
+		// 清理无效的 UTF-8 字符
+		cleanedText := sanitizeUTF8(chunkText)
+
 		chunks[i] = &Chunk{
 			ID:              uuid.New().String(),
 			DocumentID:      documentID,
 			KnowledgeBaseID: doc.KnowledgeBaseID,
-			Content:         chunkText,
+			Content:         cleanedText,
 			Position:        i,
-			TokenCount:      len(chunkText) / 4, // 粗略估算
+			TokenCount:      len(cleanedText) / 4, // 粗略估算
 			Embedding:       embeddings[i],
 			CreatedAt:       time.Now(),
 		}
@@ -400,4 +406,26 @@ func getContentType(fileType string) string {
 	default:
 		return "application/octet-stream"
 	}
+}
+
+// sanitizeUTF8 清理文本中的无效 UTF-8 字符
+func sanitizeUTF8(s string) string {
+	if utf8.ValidString(s) {
+		return s
+	}
+
+	// 使用 strings.Builder 重建字符串，替换无效字符
+	var builder strings.Builder
+	builder.Grow(len(s))
+
+	for _, r := range s {
+		if r == utf8.RuneError {
+			// 用空格替换无效字符
+			builder.WriteRune(' ')
+		} else {
+			builder.WriteRune(r)
+		}
+	}
+
+	return builder.String()
 }

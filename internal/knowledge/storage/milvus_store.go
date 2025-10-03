@@ -68,7 +68,7 @@ func (s *MilvusStore) CreateCollection(ctx context.Context, collectionName strin
 	// 创建索引
 	indexOpts := &milvus.IndexOptions{
 		IndexType:  milvus.IndexTypeIVFFlat,
-		MetricType: milvus.MetricTypeIP, // Inner Product (余弦相似度，向量需归一化)
+		MetricType: milvus.MetricTypeCosine, // Cosine similarity (与 Cherry Studio 一致)
 		Params: map[string]interface{}{
 			"nlist": 1024,
 		},
@@ -193,7 +193,7 @@ func (s *MilvusStore) Search(ctx context.Context, req *SearchVectorRequest) ([]*
 		Limit:        req.TopK,
 	}
 
-	results, err := s.client.Search(ctx, req.CollectionName, [][]float32{req.Vector}, "embedding", milvus.MetricTypeIP, req.TopK, searchOpts)
+	results, err := s.client.Search(ctx, req.CollectionName, [][]float32{req.Vector}, "embedding", milvus.MetricTypeCosine, req.TopK, searchOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to search vectors: %w", err)
 	}
@@ -224,8 +224,8 @@ func (s *MilvusStore) Search(ctx context.Context, req *SearchVectorRequest) ([]*
 
 		searchResults = append(searchResults, &SearchResult{
 			ID:       id,
-			Score:    score,
-			Distance: 1 - score, // IP 距离转换
+			Score:    score,          // COSINE 相似度 (0-1, 越高越相似)
+			Distance: 1 - score,      // 转换为距离
 			Metadata: result.Fields,
 		})
 	}
