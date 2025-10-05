@@ -49,3 +49,8 @@ docs/
 
 # Data files
 data/
+
+# Configuration files with secrets
+config.yaml
+config.*.yaml
+!config.example.yaml
