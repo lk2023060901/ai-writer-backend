@@ -12,6 +12,7 @@ import (
 	"github.com/lk2023060901/ai-writer-backend/internal/auth/middleware"
 	authservice "github.com/lk2023060901/ai-writer-backend/internal/auth/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/conf"
+	emailhandler "github.com/lk2023060901/ai-writer-backend/internal/email/handler"
 	kbservice "github.com/lk2023060901/ai-writer-backend/internal/knowledge/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
@@ -20,16 +21,18 @@ import (
 )
 
 type HTTPServer struct {
-	server          *http.Server
-	logger          *logger.Logger
-	userService     *service.UserService
-	authService     *authservice.AuthService
-	agentService    *agentservice.AgentService
-	aiConfigService *kbservice.AIProviderService
-	kbService       *kbservice.KnowledgeBaseService
-	documentService *kbservice.DocumentService
-	topicService    *assistantservice.TopicService
-	messageService  *assistantservice.MessageService
+	server           *http.Server
+	logger           *logger.Logger
+	userService      *service.UserService
+	authService      *authservice.AuthService
+	agentService     *agentservice.AgentService
+	aiConfigService  *kbservice.AIProviderService
+	kbService        *kbservice.KnowledgeBaseService
+	documentService  *kbservice.DocumentService
+	topicService     *assistantservice.TopicService
+	messageService   *assistantservice.MessageService
+	emailHandler     *emailhandler.EmailHandler
+	oauth2Handler    *emailhandler.OAuth2Handler
 }
 
 func NewHTTPServer(
@@ -43,6 +46,8 @@ func NewHTTPServer(
 	documentService *kbservice.DocumentService,
 	topicService *assistantservice.TopicService,
 	messageService *assistantservice.MessageService,
+	emailHandler *emailhandler.EmailHandler,
+	oauth2Handler *emailhandler.OAuth2Handler,
 	redisClient *redis.Client,
 ) *HTTPServer {
 	gin.SetMode(gin.ReleaseMode)
@@ -75,6 +80,12 @@ func NewHTTPServer(
 			auth.POST("/2fa/verify", authService.Verify2FA)
 			auth.POST("/refresh", authService.RefreshToken)
 		}
+
+		// OAuth2 callback route (public - Google redirects here without JWT)
+		email := publicAPI.Group("/email")
+		{
+			email.GET("/oauth2/callback", oauth2Handler.Callback)
+		}
 	}
 
 	// Protected API routes (authentication required)
@@ -104,6 +115,10 @@ func NewHTTPServer(
 			agents.DELETE("/:id", agentService.DeleteAgent)
 			agents.PATCH("/:id/enable", agentService.EnableAgent)
 			agents.PATCH("/:id/disable", agentService.DisableAgent)
+
+			// Import routes
+			agents.POST("/import/file", agentService.ImportFromFile)
+			agents.POST("/import/url", agentService.ImportFromURL)
 		}
 
 		// AI Provider Config routes (protected)
@@ -139,6 +154,15 @@ func NewHTTPServer(
 
 		// Message routes (protected)
 		messageService.RegisterRoutes(protectedAPI)
+
+		// Email routes (protected)
+		email := protectedAPI.Group("/email")
+		{
+			email.POST("/send", emailHandler.SendEmail)
+			email.GET("/oauth2/auth-url", oauth2Handler.GetAuthURL)
+			email.GET("/oauth2/status", oauth2Handler.GetStatus)
+			email.POST("/oauth2/revoke", oauth2Handler.RevokeAuthorization)
+		}
 	}
 
 	addr := fmt.Sprintf("%s:%d", config.Server.Host, config.Server.Port)
@@ -148,15 +172,17 @@ func NewHTTPServer(
 			Addr:    addr,
 			Handler: router,
 		},
-		logger:          log,
-		userService:     userService,
-		authService:     authService,
-		agentService:    agentService,
-		aiConfigService: aiConfigService,
-		kbService:       kbService,
-		documentService: documentService,
-		topicService:    topicService,
-		messageService:  messageService,
+		logger:           log,
+		userService:      userService,
+		authService:      authService,
+		agentService:     agentService,
+		aiConfigService:  aiConfigService,
+		kbService:        kbService,
+		documentService:  documentService,
+		topicService:     topicService,
+		messageService:   messageService,
+		emailHandler:     emailHandler,
+		oauth2Handler:    oauth2Handler,
 	}
 }
 

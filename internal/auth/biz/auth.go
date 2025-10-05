@@ -53,6 +53,7 @@ type UserRepo interface {
 	Create(ctx context.Context, user *User) error
 	GetByID(ctx context.Context, id string) (*User, error)
 	GetByEmail(ctx context.Context, email string) (*User, error)
+	GetByEmailOrName(ctx context.Context, account string) (*User, error) // 通过邮箱或姓名查找
 	GetByRefreshToken(ctx context.Context, refreshToken string) (*User, error)
 	Update(ctx context.Context, user *User) error
 	UpdateLoginInfo(ctx context.Context, userID string, ip string) error
@@ -123,8 +124,9 @@ func (uc *AuthUseCase) Register(ctx context.Context, name, email, password strin
 }
 
 // Login 用户登录（第一步：验证密码）
-func (uc *AuthUseCase) Login(ctx context.Context, email, password, ip string) (*LoginResult, error) {
-	user, err := uc.userRepo.GetByEmail(ctx, email)
+func (uc *AuthUseCase) Login(ctx context.Context, account, password, ip string, rememberMe bool) (*LoginResult, error) {
+	// 通过邮箱或姓名查找用户
+	user, err := uc.userRepo.GetByEmailOrName(ctx, account)
 	if err != nil {
 		return nil, ErrInvalidCredentials
 	}
@@ -163,7 +165,7 @@ func (uc *AuthUseCase) Login(ctx context.Context, email, password, ip string) (*
 	}
 
 	// 不需要 2FA，直接生成 token
-	return uc.generateTokens(ctx, user, ip)
+	return uc.generateTokens(ctx, user, ip, rememberMe)
 }
 
 // Verify2FA 验证 2FA 代码（第二步）
@@ -197,7 +199,7 @@ func (uc *AuthUseCase) Verify2FA(ctx context.Context, pendingAuthID, code string
 	if uc.totpManager.ValidateCode(*user.TwoFactorSecret, code) {
 		// TOTP 验证成功，删除 pending auth
 		_ = uc.pendingAuthRepo.Delete(ctx, pendingAuthID)
-		return uc.generateTokens(ctx, user, pendingAuth.IP)
+		return uc.generateTokens(ctx, user, pendingAuth.IP, false) // 2FA验证时暂不支持记住我
 	}
 
 	// 尝试备用恢复码
@@ -216,7 +218,7 @@ func (uc *AuthUseCase) Verify2FA(ctx context.Context, pendingAuthID, code string
 
 		// 删除 pending auth
 		_ = uc.pendingAuthRepo.Delete(ctx, pendingAuthID)
-		return uc.generateTokens(ctx, user, pendingAuth.IP)
+		return uc.generateTokens(ctx, user, pendingAuth.IP, false) // 2FA验证时暂不支持记住我
 	}
 
 	// 验证失败，增加尝试次数
@@ -341,7 +343,7 @@ func (uc *AuthUseCase) Disable2FA(ctx context.Context, userID string, code strin
 }
 
 // generateTokens 生成 token 对
-func (uc *AuthUseCase) generateTokens(ctx context.Context, user *User, ip string) (*LoginResult, error) {
+func (uc *AuthUseCase) generateTokens(ctx context.Context, user *User, ip string, rememberMe bool) (*LoginResult, error) {
 	// 生成 access token
 	accessToken, err := uc.jwtManager.GenerateAccessToken(user.ID, user.Email)
 	if err != nil {
@@ -354,8 +356,15 @@ func (uc *AuthUseCase) generateTokens(ctx context.Context, user *User, ip string
 		return nil, err
 	}
 
-	// 保存 refresh token
-	expiresAt := time.Now().Add(auth.RefreshTokenDuration)
+	// 保存 refresh token - 如果勾选"记住我",则90天有效期,否则7天
+	var tokenDuration time.Duration
+	if rememberMe {
+		tokenDuration = 90 * 24 * time.Hour // 90天
+	} else {
+		tokenDuration = auth.RefreshTokenDuration // 默认7天
+	}
+
+	expiresAt := time.Now().Add(tokenDuration)
 	user.RefreshToken = &refreshToken
 	user.RefreshTokenExpiresAt = &expiresAt
 

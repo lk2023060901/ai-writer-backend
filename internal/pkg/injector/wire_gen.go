@@ -21,6 +21,9 @@ import (
 	service2 "github.com/lk2023060901/ai-writer-backend/internal/auth/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/conf"
 	"github.com/lk2023060901/ai-writer-backend/internal/data"
+	"github.com/lk2023060901/ai-writer-backend/internal/email/handler"
+	service6 "github.com/lk2023060901/ai-writer-backend/internal/email/service"
+	"github.com/lk2023060901/ai-writer-backend/internal/email/types"
 	biz3 "github.com/lk2023060901/ai-writer-backend/internal/knowledge/biz"
 	data2 "github.com/lk2023060901/ai-writer-backend/internal/knowledge/data"
 	"github.com/lk2023060901/ai-writer-backend/internal/knowledge/embedding"
@@ -28,6 +31,7 @@ import (
 	"github.com/lk2023060901/ai-writer-backend/internal/knowledge/queue"
 	service4 "github.com/lk2023060901/ai-writer-backend/internal/knowledge/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/oauth2"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
 	"github.com/lk2023060901/ai-writer-backend/internal/server"
 	"github.com/lk2023060901/ai-writer-backend/internal/user/biz"
@@ -81,8 +85,27 @@ func InitializeApp(config *conf.Config, log *logger.Logger) (*App, func(), error
 	messageRepo := provideMessageRepo(data)
 	messageUseCase := biz4.NewMessageUseCase(messageRepo, topicRepo)
 	messageService := service5.NewMessageService(messageUseCase)
+	emailConfig := provideEmailConfig(config)
+	oauth2Config := provideOAuth2Config(config)
+	tokenStore, err := provideTokenStore(data)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	tokenProvider, err := provideTokenProvider(oauth2Config, tokenStore)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	emailService, err := provideEmailService(emailConfig, tokenProvider)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	emailHandler := handler.NewEmailHandler(emailService)
 	client := provideRedisClient(data)
-	httpServer := server.NewHTTPServer(config, log, userService, authService, agentService, aiProviderService, knowledgeBaseService, documentService, topicService, messageService, client)
+	oAuth2Handler := handler.NewOAuth2Handler(emailService, client)
+	httpServer := server.NewHTTPServer(config, log, userService, authService, agentService, aiProviderService, knowledgeBaseService, documentService, topicService, messageService, emailHandler, oAuth2Handler, client)
 	authServiceServer := provideGRPCAuthService(authUseCase, log)
 	grpcServer := server.NewGRPCServer(config, log, authServiceServer)
 	app, cleanup2 := newApp(config, log, httpServer, grpcServer, worker)
@@ -142,10 +165,14 @@ var serviceProviderSet = wire.NewSet(
 	provideVectorDBService,
 	provideEmbeddingService,
 	provideDocumentProcessor,
+	provideEmailConfig,
+	provideOAuth2Config,
+	provideTokenStore,
+	provideTokenProvider,
 )
 
 // HTTP/gRPC service providers
-var httpServiceProviderSet = wire.NewSet(service.NewUserService, service2.NewAuthService, provideGRPCAuthService, service3.NewAgentService, service4.NewAIProviderService, service4.NewKnowledgeBaseService, service4.NewDocumentService, service5.NewTopicService, service5.NewMessageService)
+var httpServiceProviderSet = wire.NewSet(service.NewUserService, service2.NewAuthService, provideGRPCAuthService, service3.NewAgentService, service4.NewAIProviderService, service4.NewKnowledgeBaseService, service4.NewDocumentService, service5.NewTopicService, service5.NewMessageService, provideEmailService, handler.NewEmailHandler, handler.NewOAuth2Handler)
 
 // Server providers
 var serverProviderSet = wire.NewSet(server.NewHTTPServer, server.NewGRPCServer, provideDocumentWorkerWithStart)
@@ -255,6 +282,49 @@ func provideEmbeddingService() biz3.EmbeddingService {
 
 func provideDocumentProcessor() biz3.DocumentProcessor {
 	return processor.NewDocumentProcessor()
+}
+
+func provideEmailConfig(config *conf.Config) *types.EmailConfig {
+	return &types.EmailConfig{
+		SMTPHost:       config.Email.SMTPHost,
+		SMTPPort:       config.Email.SMTPPort,
+		FromAddr:       config.Email.FromAddr,
+		FromName:       config.Email.FromName,
+		OAuth2Enabled:  config.Email.OAuth2Enabled,
+		MaxRetries:     config.Email.MaxRetries,
+		RetryInterval:  config.Email.RetryInterval,
+		ConnectTimeout: config.Email.ConnectTimeout,
+		SendTimeout:    config.Email.SendTimeout,
+	}
+}
+
+func provideOAuth2Config(config *conf.Config) *oauth2.Config {
+	return &oauth2.Config{
+		ClientID:     config.OAuth2.ClientID,
+		ClientSecret: config.OAuth2.ClientSecret,
+		RedirectURL:  config.OAuth2.RedirectURL,
+		Scopes:       config.OAuth2.Scopes,
+		AuthURL:      config.OAuth2.AuthURL,
+		TokenURL:     config.OAuth2.TokenURL,
+	}
+}
+
+func provideTokenStore(d *data.Data) (oauth2.TokenStore, error) {
+	return oauth2.NewDatabaseTokenStore(d.DBWrapper, "gmail")
+}
+
+func provideTokenProvider(
+	oauth2Config *oauth2.Config,
+	tokenStore oauth2.TokenStore,
+) (oauth2.TokenProvider, error) {
+	return oauth2.NewGoogleTokenProvider(oauth2Config, tokenStore)
+}
+
+func provideEmailService(
+	emailConfig *types.EmailConfig,
+	tokenProvider oauth2.TokenProvider,
+) (*service6.EmailService, error) {
+	return service6.NewEmailService(emailConfig, tokenProvider)
 }
 
 func newApp(

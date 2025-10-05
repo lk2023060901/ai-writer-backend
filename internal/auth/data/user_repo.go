@@ -60,6 +60,21 @@ func (r *AuthUserRepo) GetByEmail(ctx context.Context, email string) (*biz.User,
 	return r.toBizUser(&po), nil
 }
 
+// GetByEmailOrName 根据邮箱或姓名获取用户
+func (r *AuthUserRepo) GetByEmailOrName(ctx context.Context, account string) (*biz.User, error) {
+	var po data.UserPO
+	// 同时匹配 email 或 name 字段
+	if err := r.db.WithContext(ctx).GetDB().
+		Where("(email = ? OR name = ?) AND deleted_at IS NULL", account, account).
+		First(&po).Error; err != nil {
+		if database.IsRecordNotFoundError(err) {
+			return nil, biz.ErrUserNotFound
+		}
+		return nil, err
+	}
+	return r.toBizUser(&po), nil
+}
+
 // Update 更新用户
 func (r *AuthUserRepo) Update(ctx context.Context, user *biz.User) error {
 	po := r.toUserPO(user)

@@ -16,6 +16,8 @@ type Config struct {
 	Log       LogConfig
 	MinerU    MinerUConfig
 	Auth      AuthConfig
+	Email     EmailConfig
+	OAuth2    OAuth2Config
 }
 
 type ServerConfig struct {
@@ -86,6 +88,27 @@ type AuthConfig struct {
 	JWTIssuer   string `mapstructure:"jwt_issuer"`
 	TOTPIssuer  string `mapstructure:"totp_issuer"`
 	BackupCodes int    `mapstructure:"backup_codes"`
+}
+
+type EmailConfig struct {
+	SMTPHost       string        `mapstructure:"smtp_host"`
+	SMTPPort       int           `mapstructure:"smtp_port"`
+	FromAddr       string        `mapstructure:"from_addr"`
+	FromName       string        `mapstructure:"from_name"`
+	OAuth2Enabled  bool          `mapstructure:"oauth2_enabled"`
+	MaxRetries     int           `mapstructure:"max_retries"`
+	RetryInterval  time.Duration `mapstructure:"retry_interval"`
+	ConnectTimeout time.Duration `mapstructure:"connect_timeout"`
+	SendTimeout    time.Duration `mapstructure:"send_timeout"`
+}
+
+type OAuth2Config struct {
+	ClientID     string   `mapstructure:"client_id"`
+	ClientSecret string   `mapstructure:"client_secret"`
+	RedirectURL  string   `mapstructure:"redirect_url"`
+	Scopes       []string `mapstructure:"scopes"`
+	AuthURL      string   `mapstructure:"auth_url"`
+	TokenURL     string   `mapstructure:"token_url"`
 }
 
 func LoadConfig(path string) (*Config, error) {

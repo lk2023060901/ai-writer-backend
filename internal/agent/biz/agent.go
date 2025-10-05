@@ -196,3 +196,58 @@ func (uc *AgentUseCase) EnableAgent(ctx context.Context, id string, userID strin
 func (uc *AgentUseCase) DisableAgent(ctx context.Context, id string, userID string) error {
 	return uc.agentRepo.UpdateEnabled(ctx, id, userID, false)
 }
+
+// BatchCreateAgents 批量创建智能体
+func (uc *AgentUseCase) BatchCreateAgents(ctx context.Context, userID string, items []struct {
+	Name   string
+	Emoji  string
+	Prompt string
+	Tags   []string
+}) ([]*Agent, []error) {
+	agents := make([]*Agent, 0, len(items))
+	errors := make([]error, 0)
+
+	for i, item := range items {
+		// 验证
+		if item.Name == "" {
+			errors = append(errors, ErrAgentNameRequired)
+			continue
+		}
+		if item.Prompt == "" {
+			errors = append(errors, ErrAgentPromptRequired)
+			continue
+		}
+		if len(item.Prompt) < 10 {
+			errors = append(errors, ErrAgentPromptTooShort)
+			continue
+		}
+
+		agent := &Agent{
+			ID:               uuid.Must(uuid.NewV7()).String(),
+			OwnerID:          userID,
+			Name:             item.Name,
+			Emoji:            item.Emoji,
+			Prompt:           item.Prompt,
+			KnowledgeBaseIDs: []string{},
+			Tags:             item.Tags,
+			Type:             "agent",
+			IsEnabled:        true,
+			CreatedAt:        time.Now(),
+			UpdatedAt:        time.Now(),
+		}
+
+		if err := uc.agentRepo.Create(ctx, agent); err != nil {
+			errors = append(errors, err)
+			continue
+		}
+
+		agents = append(agents, agent)
+
+		// 确保每个智能体的创建时间略有不同（UUID v7 基于时间戳）
+		if i < len(items)-1 {
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	return agents, errors
+}

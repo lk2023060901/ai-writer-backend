@@ -1,0 +1,70 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+  grpc_port: 9090
+
+database:
+  host: "localhost"
+  port: 5432
+  user: "postgres"
+  password: "postgres"
+  database: "aiwriter"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 300
+  auto_migrate: false
+
+redis:
+  mode: "single"
+  master_name: ""
+  addrs:
+    - "localhost:6379"
+  password: ""
+  db: 0
+
+minio:
+  endpoint: "localhost:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  use_ssl: false
+  bucket_name: "aiwriter"
+  region: ""
+
+milvus:
+  address: "localhost:19530"
+  username: ""
+  password: ""
+  database: "default"
+
+log:
+  level: "info"
+  format: "json"
+  output: "stdout"
+
+auth:
+  jwt_secret: "your-secret-key-change-in-production"
+  access_token_duration: 15m
+  refresh_token_duration: 168h
+  jwt_issuer: "ai-writer-backend"
+  totp_issuer: "AI Writer"
+  backup_codes: 8
+
+email:
+  smtp_host: "smtp.gmail.com"
+  smtp_port: 587
+  from_addr: "your-email@gmail.com"
+  from_name: "AI Writer"
+  oauth2_enabled: true
+  max_retries: 3
+  retry_interval: 2s
+  connect_timeout: 10s
+  send_timeout: 30s
+
+oauth2:
+  client_id: "your-google-oauth2-client-id"
+  client_secret: "your-google-oauth2-client-secret"
+  redirect_url: "http://localhost:8080/api/v1/email/oauth2/callback"
+  scopes:
+    - "https://mail.google.com/"
+  auth_url: ""
+  token_url: ""

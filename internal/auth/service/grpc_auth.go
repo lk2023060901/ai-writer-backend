@@ -69,7 +69,7 @@ func (s *GRPCAuthService) Login(ctx context.Context, req *pb.LoginRequest) (*pb.
 		ip = validator.GetIPOrDefault(p.Addr.String(), "127.0.0.1")
 	}
 
-	result, err := s.authUC.Login(ctx, req.Email, req.Password, ip)
+	result, err := s.authUC.Login(ctx, req.Email, req.Password, ip, false) // gRPC登录暂不支持rememberMe
 	if err != nil {
 		s.logger.Warn("login failed",
 			zap.Error(err),

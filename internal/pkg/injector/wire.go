@@ -19,6 +19,9 @@ import (
 	authservice "github.com/lk2023060901/ai-writer-backend/internal/auth/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/conf"
 	"github.com/lk2023060901/ai-writer-backend/internal/data"
+	emailhandler "github.com/lk2023060901/ai-writer-backend/internal/email/handler"
+	emailservice "github.com/lk2023060901/ai-writer-backend/internal/email/service"
+	emailtypes "github.com/lk2023060901/ai-writer-backend/internal/email/types"
 	kbbiz "github.com/lk2023060901/ai-writer-backend/internal/knowledge/biz"
 	kbdata "github.com/lk2023060901/ai-writer-backend/internal/knowledge/data"
 	kbembedding "github.com/lk2023060901/ai-writer-backend/internal/knowledge/embedding"
@@ -26,6 +29,7 @@ import (
 	kbqueue "github.com/lk2023060901/ai-writer-backend/internal/knowledge/queue"
 	kbservice "github.com/lk2023060901/ai-writer-backend/internal/knowledge/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
+	oauth2pkg "github.com/lk2023060901/ai-writer-backend/internal/pkg/oauth2"
 	pkgredis "github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
 	"github.com/lk2023060901/ai-writer-backend/internal/server"
 	userbiz "github.com/lk2023060901/ai-writer-backend/internal/user/biz"
@@ -95,6 +99,10 @@ var serviceProviderSet = wire.NewSet(
 	provideVectorDBService,
 	provideEmbeddingService,
 	provideDocumentProcessor,
+	provideEmailConfig,
+	provideOAuth2Config,
+	provideTokenStore,
+	provideTokenProvider,
 )
 
 // HTTP/gRPC service providers
@@ -108,6 +116,9 @@ var httpServiceProviderSet = wire.NewSet(
 	kbservice.NewDocumentService,
 	assistantservice.NewTopicService,
 	assistantservice.NewMessageService,
+	provideEmailService,
+	emailhandler.NewEmailHandler,
+	emailhandler.NewOAuth2Handler,
 )
 
 // Server providers
@@ -236,6 +247,51 @@ func provideEmbeddingService() kbbiz.EmbeddingService {
 
 func provideDocumentProcessor() kbbiz.DocumentProcessor {
 	return kbprocessor.NewDocumentProcessor()
+}
+
+// Email service providers
+
+func provideEmailConfig(config *conf.Config) *emailtypes.EmailConfig {
+	return &emailtypes.EmailConfig{
+		SMTPHost:       config.Email.SMTPHost,
+		SMTPPort:       config.Email.SMTPPort,
+		FromAddr:       config.Email.FromAddr,
+		FromName:       config.Email.FromName,
+		OAuth2Enabled:  config.Email.OAuth2Enabled,
+		MaxRetries:     config.Email.MaxRetries,
+		RetryInterval:  config.Email.RetryInterval,
+		ConnectTimeout: config.Email.ConnectTimeout,
+		SendTimeout:    config.Email.SendTimeout,
+	}
+}
+
+func provideOAuth2Config(config *conf.Config) *oauth2pkg.Config {
+	return &oauth2pkg.Config{
+		ClientID:     config.OAuth2.ClientID,
+		ClientSecret: config.OAuth2.ClientSecret,
+		RedirectURL:  config.OAuth2.RedirectURL,
+		Scopes:       config.OAuth2.Scopes,
+		AuthURL:      config.OAuth2.AuthURL,
+		TokenURL:     config.OAuth2.TokenURL,
+	}
+}
+
+func provideTokenStore(d *data.Data) (oauth2pkg.TokenStore, error) {
+	return oauth2pkg.NewDatabaseTokenStore(d.DBWrapper, "gmail")
+}
+
+func provideTokenProvider(
+	oauth2Config *oauth2pkg.Config,
+	tokenStore oauth2pkg.TokenStore,
+) (oauth2pkg.TokenProvider, error) {
+	return oauth2pkg.NewGoogleTokenProvider(oauth2Config, tokenStore)
+}
+
+func provideEmailService(
+	emailConfig *emailtypes.EmailConfig,
+	tokenProvider oauth2pkg.TokenProvider,
+) (*emailservice.EmailService, error) {
+	return emailservice.NewEmailService(emailConfig, tokenProvider)
 }
 
 func newApp(

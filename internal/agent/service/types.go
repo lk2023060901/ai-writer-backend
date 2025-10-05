@@ -61,3 +61,17 @@ type PaginationResponse struct {
 	Total      int `json:"total"`
 	TotalPages int `json:"total_pages"`
 }
+
+// AgentImportItem 导入的智能体项
+type AgentImportItem struct {
+	Name   string   `json:"name" binding:"required,min=1,max=255"`
+	Emoji  string   `json:"emoji" binding:"omitempty,max=10"`
+	Prompt string   `json:"prompt" binding:"required,min=10"`
+	Tags   []string `json:"tags" binding:"omitempty,max=10,dive,min=1,max=50"`
+	Type   string   `json:"type" binding:"required,eq=agent"`
+}
+
+// ImportFromURLRequest 从 URL 导入请求
+type ImportFromURLRequest struct {
+	URL string `json:"url" binding:"required,url"`
+}

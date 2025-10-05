@@ -1,8 +1,13 @@
 package service
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"math"
+	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lk2023060901/ai-writer-backend/internal/agent/biz"
@@ -176,6 +181,173 @@ func (s *AgentService) DisableAgent(c *gin.Context) {
 	}
 
 	response.Success(c, nil)
+}
+
+// ImportFromFile 从上传的 JSON 文件导入智能体
+func (s *AgentService) ImportFromFile(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		response.Unauthorized(c, "未授权")
+		return
+	}
+
+	// 获取上传的文件
+	file, err := c.FormFile("file")
+	if err != nil {
+		response.BadRequest(c, "请上传 JSON 文件")
+		return
+	}
+
+	// 检查文件大小（最大 1MB）
+	if file.Size > 1*1024*1024 {
+		response.BadRequest(c, "文件大小不能超过 1MB")
+		return
+	}
+
+	// 打开文件
+	f, err := file.Open()
+	if err != nil {
+		s.logger.Error("failed to open file", zap.Error(err))
+		response.InternalError(c, "读取文件失败")
+		return
+	}
+	defer f.Close()
+
+	// 读取文件内容
+	data, err := io.ReadAll(f)
+	if err != nil {
+		s.logger.Error("failed to read file", zap.Error(err))
+		response.InternalError(c, "读取文件失败")
+		return
+	}
+
+	// 解析 JSON
+	var items []AgentImportItem
+	if err := json.Unmarshal(data, &items); err != nil {
+		response.BadRequest(c, "JSON 格式错误")
+		return
+	}
+
+	s.processBatchImport(c, userID, items)
+}
+
+// ImportFromURL 从 URL 导入智能体
+func (s *AgentService) ImportFromURL(c *gin.Context) {
+	userID := c.GetString("user_id")
+	if userID == "" {
+		response.Unauthorized(c, "未授权")
+		return
+	}
+
+	var req ImportFromURLRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
+	// 创建 HTTP 客户端（10秒超时）
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// 获取 URL 内容
+	resp, err := client.Get(req.URL)
+	if err != nil {
+		s.logger.Error("failed to fetch URL", zap.Error(err), zap.String("url", req.URL))
+		response.BadRequest(c, "无法访问该 URL")
+		return
+	}
+	defer resp.Body.Close()
+
+	// 检查 HTTP 状态码
+	if resp.StatusCode != http.StatusOK {
+		response.BadRequest(c, fmt.Sprintf("URL 返回错误状态码: %d", resp.StatusCode))
+		return
+	}
+
+	// 检查 Content-Type
+	contentType := resp.Header.Get("Content-Type")
+	if contentType != "" && contentType != "application/json" && contentType != "text/plain" {
+		s.logger.Warn("unexpected content type", zap.String("content_type", contentType))
+	}
+
+	// 限制响应大小（最大 1MB）
+	limitedReader := io.LimitReader(resp.Body, 1*1024*1024)
+	data, err := io.ReadAll(limitedReader)
+	if err != nil {
+		s.logger.Error("failed to read response", zap.Error(err))
+		response.InternalError(c, "读取 URL 内容失败")
+		return
+	}
+
+	// 解析 JSON
+	var items []AgentImportItem
+	if err := json.Unmarshal(data, &items); err != nil {
+		response.BadRequest(c, "URL 返回的 JSON 格式错误")
+		return
+	}
+
+	s.processBatchImport(c, userID, items)
+}
+
+// processBatchImport 处理批量导入逻辑
+func (s *AgentService) processBatchImport(c *gin.Context, userID string, items []AgentImportItem) {
+	if len(items) == 0 {
+		response.BadRequest(c, "导入列表为空")
+		return
+	}
+
+	if len(items) > 100 {
+		response.BadRequest(c, "单次最多导入 100 个智能体")
+		return
+	}
+
+	// 转换为 UseCase 需要的格式
+	bizItems := make([]struct {
+		Name   string
+		Emoji  string
+		Prompt string
+		Tags   []string
+	}, len(items))
+
+	for i, item := range items {
+		bizItems[i].Name = item.Name
+		bizItems[i].Emoji = item.Emoji
+		bizItems[i].Prompt = item.Prompt
+		bizItems[i].Tags = item.Tags
+	}
+
+	// 批量创建
+	agents, errs := s.uc.BatchCreateAgents(c.Request.Context(), userID, bizItems)
+
+	// 构建响应
+	successCount := len(agents)
+	failCount := len(errs)
+	errorMsgs := make([]string, 0, failCount)
+
+	for _, err := range errs {
+		errorMsgs = append(errorMsgs, err.Error())
+	}
+
+	// 返回结果
+	result := gin.H{
+		"success_count": successCount,
+		"fail_count":    failCount,
+	}
+
+	if failCount > 0 {
+		result["errors"] = errorMsgs
+	}
+
+	if successCount > 0 {
+		agentResponses := make([]*AgentResponse, len(agents))
+		for i, agent := range agents {
+			agentResponses[i] = toAgentResponse(agent)
+		}
+		result["agents"] = agentResponses
+	}
+
+	response.Success(c, result)
 }
 
 // handleError 统一错误处理

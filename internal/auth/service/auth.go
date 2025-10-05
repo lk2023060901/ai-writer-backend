@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/lk2023060901/ai-writer-backend/internal/auth/biz"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/response"
 	"go.uber.org/zap"
 )
 
@@ -49,7 +50,7 @@ type RegisterResponse struct {
 func (s *AuthService) Register(c *gin.Context) {
 	var req RegisterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -58,25 +59,26 @@ func (s *AuthService) Register(c *gin.Context) {
 		s.logger.Error("failed to register user", zap.Error(err), zap.String("email", req.Email))
 
 		if err == biz.ErrEmailAlreadyExists {
-			c.JSON(http.StatusConflict, gin.H{"error": "email already exists"})
+			response.Error(c, http.StatusConflict, "邮箱已存在")
 			return
 		}
 
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to register user"})
+		response.InternalError(c, "注册失败")
 		return
 	}
 
-	c.JSON(http.StatusCreated, RegisterResponse{
-		UserID:  user.ID,
-		Email:   user.Email,
-		Message: "Registration successful. Please verify your email.",
+	response.Created(c, gin.H{
+		"user_id": user.ID,
+		"email":   user.Email,
+		"message": "注册成功,请验证您的邮箱",
 	})
 }
 
 // LoginRequest 登录请求
 type LoginRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required"`
+	Account    string `json:"account" binding:"required"`     // 用户名或邮箱
+	Password   string `json:"password" binding:"required"`
+	RememberMe bool   `json:"remember_me"`                    // 90天免登录
 }
 
 // LoginResponse 登录响应
@@ -97,40 +99,42 @@ type LoginResponse struct {
 func (s *AuthService) Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
 	// 获取客户端 IP
 	ip := c.ClientIP()
 
-	result, err := s.authUC.Login(c.Request.Context(), req.Email, req.Password, ip)
+	result, err := s.authUC.Login(c.Request.Context(), req.Account, req.Password, ip, req.RememberMe)
 	if err != nil {
 		s.logger.Warn("login failed",
 			zap.Error(err),
-			zap.String("email", req.Email),
+			zap.String("account", req.Account),
 			zap.String("ip", ip))
 
 		switch err {
 		case biz.ErrInvalidCredentials:
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid email or password"})
+			response.Unauthorized(c, "账号或密码错误")
 		case biz.ErrAccountLocked:
-			c.JSON(http.StatusForbidden, gin.H{"error": "account locked due to too many failed attempts"})
+			response.Forbidden(c, "账号已被锁定,请15分钟后重试")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "login failed"})
+			response.InternalError(c, "登录失败")
 		}
 		return
 	}
 
-	resp := LoginResponse{
-		Require2FA: result.Require2FA,
+	// 构造响应数据
+	data := gin.H{
+		"require_2fa": result.Require2FA,
 	}
 	if result.Require2FA {
-		resp.PendingAuthID = result.PendingAuthID
+		data["pending_auth_id"] = result.PendingAuthID
 	} else {
-		resp.Tokens = result.Tokens
+		data["tokens"] = result.Tokens
 	}
-	c.JSON(http.StatusOK, resp)
+
+	response.Success(c, data)
 }
 
 // Verify2FARequest 验证 2FA 请求
@@ -155,7 +159,7 @@ type Verify2FAResponse struct {
 func (s *AuthService) Verify2FA(c *gin.Context) {
 	var req Verify2FARequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -167,19 +171,19 @@ func (s *AuthService) Verify2FA(c *gin.Context) {
 
 		switch err {
 		case biz.ErrPendingAuthNotFound, biz.ErrPendingAuthExpired:
-			c.JSON(http.StatusNotFound, gin.H{"error": "pending auth not found or expired, please login again"})
+			response.NotFound(c, "验证会话已过期,请重新登录")
 		case biz.ErrTooManyAttempts:
-			c.JSON(http.StatusTooManyRequests, gin.H{"error": "too many verification attempts, please login again"})
+			response.Error(c, http.StatusTooManyRequests, "验证尝试次数过多,请重新登录")
 		case biz.ErrInvalid2FACode:
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid 2FA code"})
+			response.Unauthorized(c, "验证码错误")
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "2FA verification failed"})
+			response.InternalError(c, "2FA验证失败")
 		}
 		return
 	}
 
-	c.JSON(http.StatusOK, Verify2FAResponse{
-		Tokens: result.Tokens,
+	response.Success(c, gin.H{
+		"tokens": result.Tokens,
 	})
 }
 
@@ -204,7 +208,7 @@ type RefreshTokenResponse struct {
 func (s *AuthService) RefreshToken(c *gin.Context) {
 	var req RefreshTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -213,15 +217,15 @@ func (s *AuthService) RefreshToken(c *gin.Context) {
 		s.logger.Warn("token refresh failed", zap.Error(err))
 
 		if err == biz.ErrInvalidToken {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid or expired refresh token"})
+			response.Unauthorized(c, "refresh token无效或已过期")
 			return
 		}
 
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "token refresh failed"})
+		response.InternalError(c, "刷新token失败")
 		return
 	}
 
-	c.JSON(http.StatusOK, RefreshTokenResponse{TokenPair: tokens})
+	response.Success(c, tokens)
 }
 
 // Enable2FAResponse 启用 2FA 响应
@@ -242,23 +246,21 @@ func (s *AuthService) Enable2FA(c *gin.Context) {
 	// 从上下文获取用户 ID（由中间件注入）
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		response.Unauthorized(c, "未授权")
 		return
 	}
 
 	setup, err := s.authUC.Enable2FA(c.Request.Context(), userID.(string))
 	if err != nil {
 		s.logger.Error("failed to enable 2FA", zap.Error(err), zap.String("user_id", userID.(string)))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to enable 2FA"})
+		response.InternalError(c, "启用2FA失败")
 		return
 	}
 
-	// 将二维码保存到临时存储，生成下载 URL
-	// 这里简化处理，直接返回 base64 编码的图片
-	c.JSON(http.StatusOK, Enable2FAResponse{
-		Secret:      setup.Secret,
-		QRCodeURL:   "/auth/2fa/qrcode", // 前端需要再次请求获取二维码
-		BackupCodes: setup.BackupCodes,
+	response.Success(c, gin.H{
+		"secret":       setup.Secret,
+		"qr_code_url":  "/api/v1/auth/2fa/qrcode",
+		"backup_codes": setup.BackupCodes,
 	})
 
 	// 同时设置二维码到上下文供下次请求使用
@@ -276,7 +278,7 @@ func (s *AuthService) Enable2FA(c *gin.Context) {
 func (s *AuthService) GetQRCode(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		response.Unauthorized(c, "未授权")
 		return
 	}
 
@@ -284,7 +286,7 @@ func (s *AuthService) GetQRCode(c *gin.Context) {
 	setup, err := s.authUC.Enable2FA(c.Request.Context(), userID.(string))
 	if err != nil {
 		s.logger.Error("failed to get QR code", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get QR code"})
+		response.InternalError(c, "获取二维码失败")
 		return
 	}
 
@@ -308,13 +310,13 @@ type Confirm2FARequest struct {
 func (s *AuthService) Confirm2FA(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		response.Unauthorized(c, "未授权")
 		return
 	}
 
 	var req Confirm2FARequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -322,15 +324,15 @@ func (s *AuthService) Confirm2FA(c *gin.Context) {
 		s.logger.Warn("2FA confirmation failed", zap.Error(err), zap.String("user_id", userID.(string)))
 
 		if err == biz.ErrInvalid2FACode {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid verification code"})
+			response.Unauthorized(c, "验证码错误")
 			return
 		}
 
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to confirm 2FA"})
+		response.InternalError(c, "确认2FA失败")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "2FA enabled successfully"})
+	response.SuccessWithMessage(c, "2FA已成功启用", nil)
 }
 
 // Disable2FARequest 禁用 2FA 请求
@@ -350,13 +352,13 @@ type Disable2FARequest struct {
 func (s *AuthService) Disable2FA(c *gin.Context) {
 	userID, exists := c.Get("user_id")
 	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
+		response.Unauthorized(c, "未授权")
 		return
 	}
 
 	var req Disable2FARequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -364,15 +366,15 @@ func (s *AuthService) Disable2FA(c *gin.Context) {
 		s.logger.Warn("2FA disable failed", zap.Error(err), zap.String("user_id", userID.(string)))
 
 		if err == biz.ErrInvalid2FACode {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid verification code"})
+			response.Unauthorized(c, "验证码错误")
 			return
 		}
 
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to disable 2FA"})
+		response.InternalError(c, "禁用2FA失败")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "2FA disabled successfully"})
+	response.SuccessWithMessage(c, "2FA已成功禁用", nil)
 }
 
 // RegisterRoutes 注册路由
