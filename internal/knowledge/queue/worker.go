@@ -163,13 +163,20 @@ func (w *Worker) processTask(ctx context.Context, task *DocumentTask, logger *za
 		logger.Error("failed to mark document as processing", zap.Error(err))
 	}
 
+	// 获取文档信息
+	doc, err := w.docUseCase.DocumentRepo.GetByID(ctx, task.DocumentID)
+	if err != nil {
+		logger.Error("failed to get document info", zap.Error(err))
+		return
+	}
+
 	// SSE 广播: 开始处理
+	doc.ProcessStatus = "processing" // 更新状态
 	w.sseHub.Broadcast(resource, sse.Event{
 		Type: "status",
 		Data: map[string]interface{}{
-			"document_id": task.DocumentID,
-			"status":      "processing",
-			"message":     "Document processing started",
+			"document": biz.ToDocumentResponse(doc),
+			"message":  "Document processing started",
 		},
 	})
 
@@ -191,45 +198,70 @@ func (w *Worker) processTask(ctx context.Context, task *DocumentTask, logger *za
 			_, _ = w.redis.LPush(ctx, DocumentProcessQueue, string(taskJSON))
 			logger.Info("document re-enqueued for retry", zap.Int("retry_count", task.RetryCount))
 
+			// 获取最新文档信息
+			doc, _ := w.docUseCase.DocumentRepo.GetByID(ctx, task.DocumentID)
+			if doc != nil {
+				doc.ProcessStatus = "retrying" // 更新状态
+				doc.ProcessError = err.Error() // 设置错误信息
+			}
+
 			// SSE 广播: 重试中
 			w.sseHub.Broadcast(resource, sse.Event{
 				Type: "status",
 				Data: map[string]interface{}{
-					"document_id": task.DocumentID,
-					"status":      "retrying",
+					"document":    biz.ToDocumentResponse(doc),
 					"retry_count": task.RetryCount,
-					"error":       err.Error(),
+					"message":     fmt.Sprintf("Processing failed, retrying (%d/3): %s", task.RetryCount, err.Error()),
 				},
 			})
 		} else {
 			logger.Error("document processing failed after max retries")
 
+			// 获取最新文档信息
+			doc, _ := w.docUseCase.DocumentRepo.GetByID(ctx, task.DocumentID)
+			if doc != nil {
+				doc.ProcessStatus = "failed"   // 更新状态
+				doc.ProcessError = err.Error() // 设置错误信息
+			}
+
 			// SSE 广播: 失败
 			w.sseHub.Broadcast(resource, sse.Event{
 				Type: "status",
 				Data: map[string]interface{}{
-					"document_id": task.DocumentID,
-					"status":      "failed",
-					"error":       err.Error(),
+					"document": biz.ToDocumentResponse(doc),
+					"message":  fmt.Sprintf("Processing failed after max retries: %s", err.Error()),
 				},
 			})
 		}
 	} else {
 		logger.Info("document processed successfully")
 
-		// 获取最新文档信息
-		doc, _ := w.docUseCase.DocumentRepo.GetByID(ctx, task.DocumentID)
+		// 等待一小段时间确保数据库事务提交
+		time.Sleep(500 * time.Millisecond)
 
-		// SSE 广播: 完成
-		w.sseHub.Broadcast(resource, sse.Event{
-			Type: "status",
-			Data: map[string]interface{}{
-				"document_id": task.DocumentID,
-				"status":      "completed",
-				"chunk_count": doc.ChunkCount,
-				"message":     "Document processing completed successfully",
-			},
-		})
+		// 获取最新文档信息
+		doc, err := w.docUseCase.DocumentRepo.GetByID(ctx, task.DocumentID)
+		if err != nil {
+			logger.Error("failed to get updated document info", zap.Error(err))
+			// 使用默认信息
+			w.sseHub.Broadcast(resource, sse.Event{
+				Type: "status",
+				Data: map[string]interface{}{
+					"document_id": task.DocumentID,
+					"status":      "completed",
+					"message":     "Document processing completed successfully",
+				},
+			})
+		} else {
+			// SSE 广播: 完成
+			w.sseHub.Broadcast(resource, sse.Event{
+				Type: "status",
+				Data: map[string]interface{}{
+					"document": biz.ToDocumentResponse(doc),
+					"message":  fmt.Sprintf("Document processing completed successfully. Generated %d chunks.", doc.ChunkCount),
+				},
+			})
+		}
 	}
 }
 

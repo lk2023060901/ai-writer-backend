@@ -27,7 +27,7 @@ func StreamResponse(c *gin.Context, client *Client, hub *Hub, keepAliveInterval 
 			"resource":  client.Resource,
 		},
 	}
-	_, err := fmt.Fprintf(c.Writer, connectedEvent.FormatSSE())
+	_, err := fmt.Fprint(c.Writer, connectedEvent.FormatSSE())
 	if err != nil {
 		return
 	}
@@ -47,7 +47,7 @@ func StreamResponse(c *gin.Context, client *Client, hub *Hub, keepAliveInterval 
 
 		case event := <-client.Channel:
 			// 发送事件
-			_, err := fmt.Fprintf(c.Writer, event.FormatSSE())
+			_, err := fmt.Fprint(c.Writer, event.FormatSSE())
 			if err != nil {
 				return
 			}

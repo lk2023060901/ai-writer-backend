@@ -107,6 +107,20 @@ func (h *Hub) GetClientCount(resource string) int {
 
 // FormatSSE 格式化为 SSE 消息格式
 func (e Event) FormatSSE() string {
-	data, _ := json.Marshal(e.Data)
+	// 将事件类型包含在 data 中，方便前端解析
+	dataWithType := map[string]interface{}{
+		"type": e.Type,
+	}
+
+	// 如果 Data 是 map，则合并；否则放在 payload 字段中
+	if dataMap, ok := e.Data.(map[string]interface{}); ok {
+		for k, v := range dataMap {
+			dataWithType[k] = v
+		}
+	} else {
+		dataWithType["payload"] = e.Data
+	}
+
+	data, _ := json.Marshal(dataWithType)
 	return "event: " + e.Type + "\ndata: " + string(data) + "\n\n"
 }
