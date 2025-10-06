@@ -21,18 +21,20 @@ import (
 )
 
 type HTTPServer struct {
-	server           *http.Server
-	logger           *logger.Logger
-	userService      *service.UserService
-	authService      *authservice.AuthService
-	agentService     *agentservice.AgentService
-	aiConfigService  *kbservice.AIProviderService
-	kbService        *kbservice.KnowledgeBaseService
-	documentService  *kbservice.DocumentService
-	topicService     *assistantservice.TopicService
-	messageService   *assistantservice.MessageService
-	emailHandler     *emailhandler.EmailHandler
-	oauth2Handler    *emailhandler.OAuth2Handler
+	server                  *http.Server
+	logger                  *logger.Logger
+	userService             *service.UserService
+	authService             *authservice.AuthService
+	agentService            *agentservice.AgentService
+	aiConfigService         *kbservice.AIProviderService
+	aiModelService          *kbservice.AIModelService
+	documentProviderService *kbservice.DocumentProviderService
+	kbService               *kbservice.KnowledgeBaseService
+	documentService         *kbservice.DocumentService
+	topicService            *assistantservice.TopicService
+	messageService          *assistantservice.MessageService
+	emailHandler            *emailhandler.EmailHandler
+	oauth2Handler           *emailhandler.OAuth2Handler
 }
 
 func NewHTTPServer(
@@ -42,6 +44,8 @@ func NewHTTPServer(
 	authService *authservice.AuthService,
 	agentService *agentservice.AgentService,
 	aiConfigService *kbservice.AIProviderService,
+	aiModelService *kbservice.AIModelService,
+	documentProviderService *kbservice.DocumentProviderService,
 	kbService *kbservice.KnowledgeBaseService,
 	documentService *kbservice.DocumentService,
 	topicService *assistantservice.TopicService,
@@ -121,14 +125,30 @@ func NewHTTPServer(
 			agents.POST("/import/url", agentService.ImportFromURL)
 		}
 
-		// AI Provider Config routes (protected)
+		// AI Provider routes (只读，系统预设)
 		aiProviders := protectedAPI.Group("/ai-providers")
 		{
-			aiProviders.GET("", aiConfigService.ListAIProviderConfigs)
-			aiProviders.POST("", aiConfigService.CreateAIProviderConfig)
-			aiProviders.GET("/:id", aiConfigService.GetAIProviderConfig)
-			aiProviders.PUT("/:id", aiConfigService.UpdateAIProviderConfig)
-			aiProviders.DELETE("/:id", aiConfigService.DeleteAIProviderConfig)
+			aiProviders.GET("", aiConfigService.ListAIProviders)
+			aiProviders.GET("/with-models", aiConfigService.ListAllProvidersWithModels) // 新增：获取所有服务商及其模型
+
+			// AI Models routes (nested under providers)
+			aiProviders.GET("/:provider_id/models", aiModelService.HandleListModelsByProvider)
+			aiProviders.POST("/:provider_id/models/sync", aiModelService.HandleSyncProviderModels)
+			aiProviders.GET("/:provider_id/models/sync-history", aiModelService.HandleGetSyncHistory)
+		}
+
+		// AI Models routes (global)
+		aiModels := protectedAPI.Group("/ai-models")
+		{
+			aiModels.GET("", aiModelService.HandleListAllModels)
+			aiModels.GET("/:id", aiModelService.HandleGetModelByID)
+			aiModels.GET("/capability/:type", aiModelService.HandleListModelsByCapability)
+		}
+
+		// Document Provider routes (只读，系统预设)
+		documentProviders := protectedAPI.Group("/document-providers")
+		{
+			documentProviders.GET("", documentProviderService.ListDocumentProviders)
 		}
 
 		// Knowledge Base routes (protected)
@@ -141,8 +161,9 @@ func NewHTTPServer(
 			kbs.DELETE("/:id", kbService.DeleteKnowledgeBase)
 
 			// Document routes (nested under knowledge bases)
-			kbs.POST("/:id/documents", documentService.UploadDocument)
+			kbs.POST("/:id/documents", documentService.UploadDocument) // 上传文档 (返回 SSE 流)
 			kbs.GET("/:id/documents", documentService.ListDocuments)
+			kbs.GET("/:id/document-stream/:doc_id", documentService.StreamDocumentStatus) // SSE (独立路径避免冲突)
 			kbs.GET("/:id/documents/:doc_id", documentService.GetDocument)
 			kbs.DELETE("/:id/documents/:doc_id", documentService.DeleteDocument)
 			kbs.POST("/:id/documents/:doc_id/reprocess", documentService.ReprocessDocument)
@@ -172,17 +193,19 @@ func NewHTTPServer(
 			Addr:    addr,
 			Handler: router,
 		},
-		logger:           log,
-		userService:      userService,
-		authService:      authService,
-		agentService:     agentService,
-		aiConfigService:  aiConfigService,
-		kbService:        kbService,
-		documentService:  documentService,
-		topicService:     topicService,
-		messageService:   messageService,
-		emailHandler:     emailHandler,
-		oauth2Handler:    oauth2Handler,
+		logger:                  log,
+		userService:             userService,
+		authService:             authService,
+		agentService:            agentService,
+		aiConfigService:         aiConfigService,
+		aiModelService:          aiModelService,
+		documentProviderService: documentProviderService,
+		kbService:               kbService,
+		documentService:         documentService,
+		topicService:            topicService,
+		messageService:          messageService,
+		emailHandler:            emailHandler,
+		oauth2Handler:           oauth2Handler,
 	}
 }
 

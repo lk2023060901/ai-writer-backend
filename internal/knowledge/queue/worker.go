@@ -9,6 +9,7 @@ import (
 
 	"github.com/lk2023060901/ai-writer-backend/internal/knowledge/biz"
 	pkgredis "github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/sse"
 	"go.uber.org/zap"
 )
 
@@ -27,6 +28,7 @@ type DocumentTask struct {
 type Worker struct {
 	redis       *pkgredis.Client
 	docUseCase  *biz.DocumentUseCase
+	sseHub      *sse.Hub
 	logger      *zap.Logger
 	workerCount int
 	wg          sync.WaitGroup
@@ -39,12 +41,14 @@ type Worker struct {
 func NewWorker(
 	redis *pkgredis.Client,
 	docUseCase *biz.DocumentUseCase,
+	sseHub *sse.Hub,
 	logger *zap.Logger,
 	workerCount int,
 ) *Worker {
 	return &Worker{
 		redis:       redis,
 		docUseCase:  docUseCase,
+		sseHub:      sseHub,
 		logger:      logger,
 		workerCount: workerCount,
 		stopCh:      make(chan struct{}),
@@ -151,11 +155,23 @@ func (w *Worker) processTask(ctx context.Context, task *DocumentTask, logger *za
 	logger = logger.With(zap.String("document_id", task.DocumentID))
 	logger.Info("processing document task")
 
+	resource := "doc:" + task.DocumentID
+
 	// 标记为处理中
 	_, err := w.redis.SAdd(ctx, ProcessingSet, task.DocumentID)
 	if err != nil {
 		logger.Error("failed to mark document as processing", zap.Error(err))
 	}
+
+	// SSE 广播: 开始处理
+	w.sseHub.Broadcast(resource, sse.Event{
+		Type: "status",
+		Data: map[string]interface{}{
+			"document_id": task.DocumentID,
+			"status":      "processing",
+			"message":     "Document processing started",
+		},
+	})
 
 	// 执行处理
 	err = w.docUseCase.ProcessDocument(ctx, task.DocumentID)
@@ -174,11 +190,46 @@ func (w *Worker) processTask(ctx context.Context, task *DocumentTask, logger *za
 			taskJSON, _ := json.Marshal(task)
 			_, _ = w.redis.LPush(ctx, DocumentProcessQueue, string(taskJSON))
 			logger.Info("document re-enqueued for retry", zap.Int("retry_count", task.RetryCount))
+
+			// SSE 广播: 重试中
+			w.sseHub.Broadcast(resource, sse.Event{
+				Type: "status",
+				Data: map[string]interface{}{
+					"document_id": task.DocumentID,
+					"status":      "retrying",
+					"retry_count": task.RetryCount,
+					"error":       err.Error(),
+				},
+			})
 		} else {
 			logger.Error("document processing failed after max retries")
+
+			// SSE 广播: 失败
+			w.sseHub.Broadcast(resource, sse.Event{
+				Type: "status",
+				Data: map[string]interface{}{
+					"document_id": task.DocumentID,
+					"status":      "failed",
+					"error":       err.Error(),
+				},
+			})
 		}
 	} else {
 		logger.Info("document processed successfully")
+
+		// 获取最新文档信息
+		doc, _ := w.docUseCase.DocumentRepo.GetByID(ctx, task.DocumentID)
+
+		// SSE 广播: 完成
+		w.sseHub.Broadcast(resource, sse.Event{
+			Type: "status",
+			Data: map[string]interface{}{
+				"document_id": task.DocumentID,
+				"status":      "completed",
+				"chunk_count": doc.ChunkCount,
+				"message":     "Document processing completed successfully",
+			},
+		})
 	}
 }
 

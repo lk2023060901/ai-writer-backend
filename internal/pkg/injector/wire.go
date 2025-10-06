@@ -31,6 +31,7 @@ import (
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
 	oauth2pkg "github.com/lk2023060901/ai-writer-backend/internal/pkg/oauth2"
 	pkgredis "github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/sse"
 	"github.com/lk2023060901/ai-writer-backend/internal/server"
 	userbiz "github.com/lk2023060901/ai-writer-backend/internal/user/biz"
 	userdata "github.com/lk2023060901/ai-writer-backend/internal/user/data"
@@ -72,7 +73,10 @@ var repositoryProviderSet = wire.NewSet(
 	providePendingAuthRepo,
 	provideAgentRepo,
 	provideOfficialAgentRepo,
-	provideAIProviderConfigRepo,
+	provideAIProviderRepo,
+	provideAIModelRepo,
+	provideModelSyncLogRepo,
+	provideDocumentProviderRepo,
 	provideKnowledgeBaseRepo,
 	provideDocumentRepo,
 	provideChunkRepo,
@@ -86,7 +90,10 @@ var useCaseProviderSet = wire.NewSet(
 	userbiz.NewUserUseCase,
 	provideAuthUseCase,
 	agentbiz.NewAgentUseCase,
-	kbbiz.NewAIProviderConfigUseCase,
+	kbbiz.NewAIProviderUseCase,
+	kbbiz.NewAIModelUseCase,
+	kbbiz.NewModelSyncUseCase,
+	kbbiz.NewDocumentProviderUseCase,
 	kbbiz.NewKnowledgeBaseUseCase,
 	kbbiz.NewDocumentUseCase,
 	assistantbiz.NewTopicUseCase,
@@ -103,6 +110,7 @@ var serviceProviderSet = wire.NewSet(
 	provideOAuth2Config,
 	provideTokenStore,
 	provideTokenProvider,
+	provideSSEHub,
 )
 
 // HTTP/gRPC service providers
@@ -112,6 +120,8 @@ var httpServiceProviderSet = wire.NewSet(
 	provideGRPCAuthService,
 	agentservice.NewAgentService,
 	kbservice.NewAIProviderService,
+	kbservice.NewAIModelService,
+	kbservice.NewDocumentProviderService,
 	kbservice.NewKnowledgeBaseService,
 	kbservice.NewDocumentService,
 	assistantservice.NewTopicService,
@@ -160,12 +170,17 @@ func provideVectorDBService(d *data.Data) kbbiz.VectorDBService {
 	return kbdata.NewMilvusVectorDBService(d.MilvusClient)
 }
 
+func provideSSEHub() *sse.Hub {
+	return sse.NewHub()
+}
+
 func provideDocumentWorkerWithStart(
 	d *data.Data,
 	docUseCase *kbbiz.DocumentUseCase,
+	sseHub *sse.Hub,
 	log *logger.Logger,
 ) (*kbqueue.Worker, error) {
-	worker := kbqueue.NewWorker(d.RedisClient, docUseCase, log.Logger, 5)
+	worker := kbqueue.NewWorker(d.RedisClient, docUseCase, sseHub, log.Logger, 5)
 	if err := worker.Start(context.Background()); err != nil {
 		return nil, err
 	}
@@ -215,8 +230,16 @@ func provideOfficialAgentRepo(d *data.Data) agentbiz.OfficialAgentRepo {
 	return agentdata.NewOfficialAgentRepo(d.DBWrapper)
 }
 
-func provideAIProviderConfigRepo(d *data.Data) kbbiz.AIProviderConfigRepo {
-	return kbdata.NewAIProviderConfigRepo(d.DBWrapper)
+func provideAIProviderRepo(d *data.Data) kbbiz.AIProviderRepo {
+	return kbdata.NewAIProviderRepo(d.DBWrapper)
+}
+
+func provideAIModelRepo(d *data.Data) kbbiz.AIModelRepo {
+	return kbdata.NewAIModelRepo(d.DBWrapper)
+}
+
+func provideDocumentProviderRepo(d *data.Data) kbbiz.DocumentProviderRepo {
+	return kbdata.NewDocumentProviderRepo(d.DBWrapper)
 }
 
 func provideKnowledgeBaseRepo(d *data.Data) kbbiz.KnowledgeBaseRepo {
@@ -237,6 +260,10 @@ func provideTopicRepo(d *data.Data) assistantbiz.TopicRepo {
 
 func provideMessageRepo(d *data.Data) assistantbiz.MessageRepo {
 	return assistantdata.NewMessageRepo(d.DBWrapper)
+}
+
+func provideModelSyncLogRepo(d *data.Data) kbbiz.ModelSyncLogRepo {
+	return kbdata.NewModelSyncLogRepo(d.DBWrapper)
 }
 
 // Service providers

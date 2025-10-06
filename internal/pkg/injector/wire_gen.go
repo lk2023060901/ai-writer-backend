@@ -33,6 +33,7 @@ import (
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/oauth2"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/sse"
 	"github.com/lk2023060901/ai-writer-backend/internal/server"
 	"github.com/lk2023060901/ai-writer-backend/internal/user/biz"
 	data3 "github.com/lk2023060901/ai-writer-backend/internal/user/data"
@@ -60,25 +61,34 @@ func InitializeApp(config *conf.Config, log *logger.Logger) (*App, func(), error
 	officialAgentRepo := provideOfficialAgentRepo(data)
 	agentUseCase := biz2.NewAgentUseCase(agentRepo, officialAgentRepo)
 	agentService := service3.NewAgentService(agentUseCase, log)
-	aiProviderConfigRepo := provideAIProviderConfigRepo(data)
-	aiProviderConfigUseCase := biz3.NewAIProviderConfigUseCase(aiProviderConfigRepo)
-	aiProviderService := service4.NewAIProviderService(aiProviderConfigUseCase, log)
+	aiProviderRepo := provideAIProviderRepo(data)
+	aiProviderUseCase := biz3.NewAIProviderUseCase(aiProviderRepo)
+	aiModelRepo := provideAIModelRepo(data)
+	aiModelUseCase := biz3.NewAIModelUseCase(aiModelRepo)
+	aiProviderService := service4.NewAIProviderService(aiProviderUseCase, aiModelUseCase, log)
+	modelSyncLogRepo := provideModelSyncLogRepo(data)
+	modelSyncUseCase := biz3.NewModelSyncUseCase(aiProviderRepo, aiModelRepo, modelSyncLogRepo)
+	aiModelService := service4.NewAIModelService(aiModelUseCase, modelSyncUseCase, zapLogger)
+	documentProviderRepo := provideDocumentProviderRepo(data)
+	documentProviderUseCase := biz3.NewDocumentProviderUseCase(documentProviderRepo)
+	documentProviderService := service4.NewDocumentProviderService(documentProviderUseCase, log)
 	knowledgeBaseRepo := provideKnowledgeBaseRepo(data)
-	knowledgeBaseUseCase := biz3.NewKnowledgeBaseUseCase(knowledgeBaseRepo, aiProviderConfigRepo)
-	knowledgeBaseService := service4.NewKnowledgeBaseService(knowledgeBaseUseCase, aiProviderConfigUseCase, log)
+	knowledgeBaseUseCase := biz3.NewKnowledgeBaseUseCase(knowledgeBaseRepo, aiModelRepo)
+	knowledgeBaseService := service4.NewKnowledgeBaseService(knowledgeBaseUseCase, aiProviderUseCase, log)
 	documentRepo := provideDocumentRepo(data)
 	chunkRepo := provideChunkRepo(data)
 	storageService := provideStorageService(data, config)
 	vectorDBService := provideVectorDBService(data)
 	embeddingService := provideEmbeddingService()
 	documentProcessor := provideDocumentProcessor()
-	documentUseCase := biz3.NewDocumentUseCase(documentRepo, chunkRepo, knowledgeBaseRepo, aiProviderConfigRepo, storageService, vectorDBService, embeddingService, documentProcessor)
-	worker, err := provideDocumentWorkerWithStart(data, documentUseCase, log)
+	documentUseCase := biz3.NewDocumentUseCase(documentRepo, chunkRepo, knowledgeBaseRepo, aiModelRepo, aiProviderRepo, storageService, vectorDBService, embeddingService, documentProcessor)
+	hub := provideSSEHub()
+	worker, err := provideDocumentWorkerWithStart(data, documentUseCase, hub, log)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	documentService := service4.NewDocumentService(documentUseCase, worker, zapLogger)
+	documentService := service4.NewDocumentService(documentUseCase, worker, hub, zapLogger)
 	topicRepo := provideTopicRepo(data)
 	topicUseCase := biz4.NewTopicUseCase(topicRepo)
 	topicService := service5.NewTopicService(topicUseCase)
@@ -105,7 +115,7 @@ func InitializeApp(config *conf.Config, log *logger.Logger) (*App, func(), error
 	emailHandler := handler.NewEmailHandler(emailService)
 	client := provideRedisClient(data)
 	oAuth2Handler := handler.NewOAuth2Handler(emailService, client)
-	httpServer := server.NewHTTPServer(config, log, userService, authService, agentService, aiProviderService, knowledgeBaseService, documentService, topicService, messageService, emailHandler, oAuth2Handler, client)
+	httpServer := server.NewHTTPServer(config, log, userService, authService, agentService, aiProviderService, aiModelService, documentProviderService, knowledgeBaseService, documentService, topicService, messageService, emailHandler, oAuth2Handler, client)
 	authServiceServer := provideGRPCAuthService(authUseCase, log)
 	grpcServer := server.NewGRPCServer(config, log, authServiceServer)
 	app, cleanup2 := newApp(config, log, httpServer, grpcServer, worker)
@@ -146,7 +156,10 @@ var repositoryProviderSet = wire.NewSet(
 	providePendingAuthRepo,
 	provideAgentRepo,
 	provideOfficialAgentRepo,
-	provideAIProviderConfigRepo,
+	provideAIProviderRepo,
+	provideAIModelRepo,
+	provideModelSyncLogRepo,
+	provideDocumentProviderRepo,
 	provideKnowledgeBaseRepo,
 	provideDocumentRepo,
 	provideChunkRepo,
@@ -156,7 +169,7 @@ var repositoryProviderSet = wire.NewSet(
 
 // Use case providers
 var useCaseProviderSet = wire.NewSet(
-	provideZapLogger, biz.NewUserUseCase, provideAuthUseCase, biz2.NewAgentUseCase, biz3.NewAIProviderConfigUseCase, biz3.NewKnowledgeBaseUseCase, biz3.NewDocumentUseCase, biz4.NewTopicUseCase, biz4.NewMessageUseCase,
+	provideZapLogger, biz.NewUserUseCase, provideAuthUseCase, biz2.NewAgentUseCase, biz3.NewAIProviderUseCase, biz3.NewAIModelUseCase, biz3.NewModelSyncUseCase, biz3.NewDocumentProviderUseCase, biz3.NewKnowledgeBaseUseCase, biz3.NewDocumentUseCase, biz4.NewTopicUseCase, biz4.NewMessageUseCase,
 )
 
 // Service providers
@@ -169,10 +182,11 @@ var serviceProviderSet = wire.NewSet(
 	provideOAuth2Config,
 	provideTokenStore,
 	provideTokenProvider,
+	provideSSEHub,
 )
 
 // HTTP/gRPC service providers
-var httpServiceProviderSet = wire.NewSet(service.NewUserService, service2.NewAuthService, provideGRPCAuthService, service3.NewAgentService, service4.NewAIProviderService, service4.NewKnowledgeBaseService, service4.NewDocumentService, service5.NewTopicService, service5.NewMessageService, provideEmailService, handler.NewEmailHandler, handler.NewOAuth2Handler)
+var httpServiceProviderSet = wire.NewSet(service.NewUserService, service2.NewAuthService, provideGRPCAuthService, service3.NewAgentService, service4.NewAIProviderService, service4.NewAIModelService, service4.NewDocumentProviderService, service4.NewKnowledgeBaseService, service4.NewDocumentService, service5.NewTopicService, service5.NewMessageService, provideEmailService, handler.NewEmailHandler, handler.NewOAuth2Handler)
 
 // Server providers
 var serverProviderSet = wire.NewSet(server.NewHTTPServer, server.NewGRPCServer, provideDocumentWorkerWithStart)
@@ -201,12 +215,17 @@ func provideVectorDBService(d *data.Data) biz3.VectorDBService {
 	return data2.NewMilvusVectorDBService(d.MilvusClient)
 }
 
+func provideSSEHub() *sse.Hub {
+	return sse.NewHub()
+}
+
 func provideDocumentWorkerWithStart(
 	d *data.Data,
 	docUseCase *biz3.DocumentUseCase,
+	sseHub *sse.Hub,
 	log *logger.Logger,
 ) (*queue.Worker, error) {
-	worker := queue.NewWorker(d.RedisClient, docUseCase, log.Logger, 5)
+	worker := queue.NewWorker(d.RedisClient, docUseCase, sseHub, log.Logger, 5)
 	if err := worker.Start(context.Background()); err != nil {
 		return nil, err
 	}
@@ -252,8 +271,16 @@ func provideOfficialAgentRepo(d *data.Data) biz2.OfficialAgentRepo {
 	return data5.NewOfficialAgentRepo(d.DBWrapper)
 }
 
-func provideAIProviderConfigRepo(d *data.Data) biz3.AIProviderConfigRepo {
-	return data2.NewAIProviderConfigRepo(d.DBWrapper)
+func provideAIProviderRepo(d *data.Data) biz3.AIProviderRepo {
+	return data2.NewAIProviderRepo(d.DBWrapper)
+}
+
+func provideAIModelRepo(d *data.Data) biz3.AIModelRepo {
+	return data2.NewAIModelRepo(d.DBWrapper)
+}
+
+func provideDocumentProviderRepo(d *data.Data) biz3.DocumentProviderRepo {
+	return data2.NewDocumentProviderRepo(d.DBWrapper)
 }
 
 func provideKnowledgeBaseRepo(d *data.Data) biz3.KnowledgeBaseRepo {
@@ -274,6 +301,10 @@ func provideTopicRepo(d *data.Data) biz4.TopicRepo {
 
 func provideMessageRepo(d *data.Data) biz4.MessageRepo {
 	return data6.NewMessageRepo(d.DBWrapper)
+}
+
+func provideModelSyncLogRepo(d *data.Data) biz3.ModelSyncLogRepo {
+	return data2.NewModelSyncLogRepo(d.DBWrapper)
 }
 
 func provideEmbeddingService() biz3.EmbeddingService {
