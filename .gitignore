@@ -39,6 +39,8 @@ migrate
 streaming_chat
 /cmd/*/main
 /examples/*/*/main
+bin/
+build/
 
 # Logs
 logs/
