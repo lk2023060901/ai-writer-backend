@@ -11,14 +11,20 @@ type CreateKnowledgeBaseRequest struct {
 	Name             string  `json:"name" binding:"required"`
 	EmbeddingModelID string  `json:"embedding_model_id" binding:"required"` // 必填，Embedding 模型 ID
 	RerankModelID    *string `json:"rerank_model_id"`                       // 可选，Rerank 模型 ID
-	ChunkSize        *int    `json:"chunk_size"`                            // 可选，不传则根据嵌入模型 max_context 自动设置
-	ChunkOverlap     *int    `json:"chunk_overlap"`                         // 可选，不传则为 0（不重叠）
-	ChunkStrategy    *string `json:"chunk_strategy"`                        // 可选，不传则为 "recursive"
+	ChunkSize        *int     `json:"chunk_size"`           // 可选，不传则根据嵌入模型 max_context 自动设置
+	ChunkOverlap     *int     `json:"chunk_overlap"`        // 可选，不传则为 0（不重叠）
+	ChunkStrategy    *string  `json:"chunk_strategy"`       // 可选，不传则为 "recursive"
+	Threshold        *float32 `json:"threshold"`            // 可选，相似度阈值（0.0-1.0），默认 0.0
+	TopK             *int     `json:"top_k"`                // 可选，返回文档数量（1-20），默认 5
+	EnableHybridSearch *bool  `json:"enable_hybrid_search"` // 可选，是否启用混合检索，默认 false
 }
 
 // UpdateKnowledgeBaseRequest 更新知识库请求
 type UpdateKnowledgeBaseRequest struct {
-	Name *string `json:"name"`
+	Name               *string  `json:"name"`
+	Threshold          *float32 `json:"threshold"`            // 相似度阈值（0.0-1.0）
+	TopK               *int     `json:"top_k"`                // 返回文档数量（1-20）
+	EnableHybridSearch *bool    `json:"enable_hybrid_search"` // 是否启用混合检索
 }
 
 // KnowledgeBaseResponse 知识库响应
@@ -30,15 +36,18 @@ type KnowledgeBaseResponse struct {
 	DocumentCount int64  `json:"document_count"`
 
 	// 私有字段（仅所有者可见，官方知识库返回 nil）
-	OwnerID          *string `json:"owner_id,omitempty"`
-	EmbeddingModelID *string `json:"embedding_model_id,omitempty"`
-	RerankModelID    *string `json:"rerank_model_id,omitempty"`
-	ChunkSize        *int    `json:"chunk_size,omitempty"`
-	ChunkOverlap     *int    `json:"chunk_overlap,omitempty"`
-	ChunkStrategy    *string `json:"chunk_strategy,omitempty"`
-	MilvusCollection *string `json:"milvus_collection,omitempty"`
-	CreatedAt        *string `json:"created_at,omitempty"`
-	UpdatedAt        *string `json:"updated_at,omitempty"`
+	OwnerID          *string  `json:"owner_id,omitempty"`
+	EmbeddingModelID *string  `json:"embedding_model_id,omitempty"`
+	RerankModelID    *string  `json:"rerank_model_id,omitempty"`
+	ChunkSize        *int     `json:"chunk_size,omitempty"`
+	ChunkOverlap     *int     `json:"chunk_overlap,omitempty"`
+	ChunkStrategy    *string  `json:"chunk_strategy,omitempty"`
+	MilvusCollection *string  `json:"milvus_collection,omitempty"`
+	Threshold        *float32 `json:"threshold,omitempty"`            // 相似度阈值
+	TopK             *int     `json:"top_k,omitempty"`                // 返回文档数量
+	EnableHybridSearch *bool  `json:"enable_hybrid_search,omitempty"` // 是否启用混合检索
+	CreatedAt        *string  `json:"created_at,omitempty"`
+	UpdatedAt        *string  `json:"updated_at,omitempty"`
 }
 
 // ListKnowledgeBasesRequest 知识库列表请求

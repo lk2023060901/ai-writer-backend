@@ -5,14 +5,14 @@ import "errors"
 // SystemOwnerID 官方资源的所有者 ID（与智能体模块一致）
 const SystemOwnerID = "00000000-0000-0000-0000-000000000000"
 
-// AI Provider Config 相关错误
+// AI Provider 相关错误
 var (
-	ErrAIProviderConfigNotFound        = errors.New("ai provider config not found")
-	ErrAIProviderConfigNameRequired    = errors.New("ai provider config name is required")
-	ErrAIProviderConfigAPIKeyRequired  = errors.New("api key is required")
-	ErrAIProviderConfigInvalidProvider = errors.New("invalid provider type")
-	ErrAIProviderConfigInUse           = errors.New("ai provider config is in use by knowledge bases")
-	ErrNoDefaultAIConfig               = errors.New("no default ai provider config found")
+	ErrAIProviderNotFound = errors.New("ai provider not found")
+)
+
+// Document Provider 相关错误
+var (
+	ErrDocumentProviderNotFound = errors.New("document provider not found")
 )
 
 // Knowledge Base 相关错误

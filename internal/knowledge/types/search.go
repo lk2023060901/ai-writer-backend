@@ -2,13 +2,12 @@ package types
 
 import "github.com/google/uuid"
 
-// SearchRequest 搜索请求
+// SearchRequest 搜索请求（仅用于内部，前端只需传 query）
 type SearchRequest struct {
 	KnowledgeBaseID uuid.UUID `json:"knowledge_base_id" validate:"required"`
 	Query           string    `json:"query" validate:"required,min=1,max=1000"`
 	TopK            int       `json:"top_k" validate:"min=1,max=100"`
 	MinScore        float32   `json:"min_score,omitempty" validate:"omitempty,min=0,max=1"`
-	EnableRerank    bool      `json:"enable_rerank"`
 }
 
 // SearchResponse 搜索响应

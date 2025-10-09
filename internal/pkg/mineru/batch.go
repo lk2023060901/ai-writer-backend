@@ -159,36 +159,79 @@ func (c *Client) WaitForBatch(ctx context.Context, batchID string, opts *PollOpt
 
 			// 统计任务状态
 			var done, failed, running int
+			var failedErrors []string
 			for _, result := range results.Data.ExtractResult {
 				switch result.State {
 				case TaskStateDone:
 					done++
 				case TaskStateFailed:
 					failed++
+					// 记录失败原因
+					if result.ErrMsg != "" {
+						failedErrors = append(failedErrors, result.ErrMsg)
+					}
 				case TaskStatePending, TaskStateRunning, TaskStateConverting, TaskStateWaitingFile:
 					running++
 				}
 			}
 
 			total := len(results.Data.ExtractResult)
-			c.logger.Info("batch progress",
+
+			// 构建日志字段
+			logFields := []zap.Field{
 				zap.String("batch_id", batchID),
 				zap.Int("total", total),
 				zap.Int("done", done),
 				zap.Int("failed", failed),
 				zap.Int("running", running),
-			)
+			}
+
+			// 记录 MinerU API 返回的错误码和消息
+			if results.Code != 0 {
+				logFields = append(logFields, zap.Int("api_code", results.Code))
+			}
+			if results.MsgCode != "" {
+				logFields = append(logFields, zap.String("api_msg_code", results.MsgCode))
+			}
+			if results.Msg != "" {
+				logFields = append(logFields, zap.String("api_msg", results.Msg))
+			}
+
+			// 如果有失败任务，记录每个任务的错误信息（API 返回的 err_msg）
+			if len(failedErrors) > 0 {
+				logFields = append(logFields, zap.Strings("task_errors", failedErrors))
+			}
+
+			c.logger.Info("batch progress", logFields...)
 
 			// 所有任务完成（成功或失败）
 			if done+failed == total {
-				if failed == total {
-					return results, ErrAllTasksFailed
-				}
-				c.logger.Info("batch completed",
+				completedLogFields := []zap.Field{
 					zap.String("batch_id", batchID),
 					zap.Int("success", done),
 					zap.Int("failed", failed),
-				)
+				}
+
+				// 记录完成时的 API 错误信息
+				if results.Code != 0 {
+					completedLogFields = append(completedLogFields, zap.Int("api_code", results.Code))
+				}
+				if results.MsgCode != "" {
+					completedLogFields = append(completedLogFields, zap.String("api_msg_code", results.MsgCode))
+				}
+				if results.Msg != "" {
+					completedLogFields = append(completedLogFields, zap.String("api_msg", results.Msg))
+				}
+				if len(failedErrors) > 0 {
+					completedLogFields = append(completedLogFields, zap.Strings("task_errors", failedErrors))
+				}
+
+				if failed == total {
+					c.logger.Error("batch all tasks failed", completedLogFields...)
+					return results, ErrAllTasksFailed
+				}
+
+				c.logger.Info("batch completed", completedLogFields...)
 				return results, nil
 			}
 

@@ -15,6 +15,8 @@ import (
 	service3 "github.com/lk2023060901/ai-writer-backend/internal/agent/service"
 	biz4 "github.com/lk2023060901/ai-writer-backend/internal/assistant/biz"
 	data6 "github.com/lk2023060901/ai-writer-backend/internal/assistant/data"
+	"github.com/lk2023060901/ai-writer-backend/internal/assistant/llm"
+	"github.com/lk2023060901/ai-writer-backend/internal/assistant/llm/providers"
 	service5 "github.com/lk2023060901/ai-writer-backend/internal/assistant/service"
 	biz5 "github.com/lk2023060901/ai-writer-backend/internal/auth/biz"
 	data4 "github.com/lk2023060901/ai-writer-backend/internal/auth/data"
@@ -31,14 +33,17 @@ import (
 	"github.com/lk2023060901/ai-writer-backend/internal/knowledge/queue"
 	service4 "github.com/lk2023060901/ai-writer-backend/internal/knowledge/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/mineru"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/oauth2"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/sse"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/workerpool"
 	"github.com/lk2023060901/ai-writer-backend/internal/server"
 	"github.com/lk2023060901/ai-writer-backend/internal/user/biz"
 	data3 "github.com/lk2023060901/ai-writer-backend/internal/user/data"
 	"github.com/lk2023060901/ai-writer-backend/internal/user/service"
 	"go.uber.org/zap"
+	"time"
 )
 
 // Injectors from wire.go:
@@ -77,24 +82,43 @@ func InitializeApp(config *conf.Config, log *logger.Logger) (*App, func(), error
 	knowledgeBaseService := service4.NewKnowledgeBaseService(knowledgeBaseUseCase, aiProviderUseCase, log)
 	documentRepo := provideDocumentRepo(data)
 	chunkRepo := provideChunkRepo(data)
+	fileStorageRepo := provideFileStorageRepo(data)
 	storageService := provideStorageService(data, config)
 	vectorDBService := provideVectorDBService(data)
 	embeddingService := provideEmbeddingService()
-	documentProcessor := provideDocumentProcessor()
-	documentUseCase := biz3.NewDocumentUseCase(documentRepo, chunkRepo, knowledgeBaseRepo, aiModelRepo, aiProviderRepo, storageService, vectorDBService, embeddingService, documentProcessor)
+	client, err := provideMinerUClient(config, log)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	documentProcessor := provideDocumentProcessor(client, log)
+	documentUseCase := provideDocumentUseCase(documentRepo, chunkRepo, knowledgeBaseRepo, aiModelRepo, aiProviderRepo, fileStorageRepo, storageService, vectorDBService, embeddingService, documentProcessor, log)
 	hub := provideSSEHub()
 	worker, err := provideDocumentWorkerWithStart(data, documentUseCase, hub, log)
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
-	documentService := service4.NewDocumentService(documentUseCase, worker, hub, zapLogger)
+	pool, err := provideUploadWorkerPool(config, log)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	documentService := service4.NewDocumentService(documentUseCase, worker, pool, hub, zapLogger)
+	assistantRepo := provideAssistantRepo(data)
 	topicRepo := provideTopicRepo(data)
+	assistantUseCase := biz4.NewAssistantUseCase(assistantRepo, topicRepo)
 	topicUseCase := biz4.NewTopicUseCase(topicRepo)
-	topicService := service5.NewTopicService(topicUseCase)
 	messageRepo := provideMessageRepo(data)
 	messageUseCase := biz4.NewMessageUseCase(messageRepo, topicRepo)
+	providerFactory := provideProviderFactory(aiProviderUseCase, zapLogger)
+	multiProviderOrchestrator := provideOrchestrator(providerFactory, documentUseCase, zapLogger)
+	assistantService := service5.NewAssistantService(assistantUseCase, topicUseCase, messageUseCase, hub, multiProviderOrchestrator)
+	topicService := service5.NewTopicService(topicUseCase)
 	messageService := service5.NewMessageService(messageUseCase)
+	favoriteRepo := provideFavoriteRepo(data)
+	favoriteUseCase := biz4.NewFavoriteUseCase(favoriteRepo)
+	favoriteService := service5.NewFavoriteService(favoriteUseCase)
 	emailConfig := provideEmailConfig(config)
 	oauth2Config := provideOAuth2Config(config)
 	tokenStore, err := provideTokenStore(data)
@@ -113,12 +137,12 @@ func InitializeApp(config *conf.Config, log *logger.Logger) (*App, func(), error
 		return nil, nil, err
 	}
 	emailHandler := handler.NewEmailHandler(emailService)
-	client := provideRedisClient(data)
-	oAuth2Handler := handler.NewOAuth2Handler(emailService, client)
-	httpServer := server.NewHTTPServer(config, log, userService, authService, agentService, aiProviderService, aiModelService, documentProviderService, knowledgeBaseService, documentService, topicService, messageService, emailHandler, oAuth2Handler, client)
+	redisClient := provideRedisClient(data)
+	oAuth2Handler := handler.NewOAuth2Handler(emailService, redisClient)
+	httpServer := server.NewHTTPServer(config, log, userService, authService, agentService, aiProviderService, aiModelService, documentProviderService, knowledgeBaseService, documentService, assistantService, topicService, messageService, favoriteService, emailHandler, oAuth2Handler, redisClient)
 	authServiceServer := provideGRPCAuthService(authUseCase, log)
 	grpcServer := server.NewGRPCServer(config, log, authServiceServer)
-	app, cleanup2 := newApp(config, log, httpServer, grpcServer, worker)
+	app, cleanup2 := newApp(config, log, httpServer, grpcServer, worker, pool)
 	return app, func() {
 		cleanup2()
 		cleanup()
@@ -163,13 +187,16 @@ var repositoryProviderSet = wire.NewSet(
 	provideKnowledgeBaseRepo,
 	provideDocumentRepo,
 	provideChunkRepo,
+	provideFileStorageRepo,
+	provideAssistantRepo,
 	provideTopicRepo,
 	provideMessageRepo,
+	provideFavoriteRepo,
 )
 
 // Use case providers
 var useCaseProviderSet = wire.NewSet(
-	provideZapLogger, biz.NewUserUseCase, provideAuthUseCase, biz2.NewAgentUseCase, biz3.NewAIProviderUseCase, biz3.NewAIModelUseCase, biz3.NewModelSyncUseCase, biz3.NewDocumentProviderUseCase, biz3.NewKnowledgeBaseUseCase, biz3.NewDocumentUseCase, biz4.NewTopicUseCase, biz4.NewMessageUseCase,
+	provideZapLogger, biz.NewUserUseCase, provideAuthUseCase, biz2.NewAgentUseCase, biz3.NewAIProviderUseCase, biz3.NewAIModelUseCase, biz3.NewModelSyncUseCase, biz3.NewDocumentProviderUseCase, biz3.NewKnowledgeBaseUseCase, provideDocumentUseCase, biz4.NewAssistantUseCase, biz4.NewTopicUseCase, biz4.NewMessageUseCase, biz4.NewFavoriteUseCase,
 )
 
 // Service providers
@@ -177,16 +204,20 @@ var serviceProviderSet = wire.NewSet(
 	provideStorageService,
 	provideVectorDBService,
 	provideEmbeddingService,
+	provideMinerUClient,
 	provideDocumentProcessor,
 	provideEmailConfig,
 	provideOAuth2Config,
 	provideTokenStore,
 	provideTokenProvider,
 	provideSSEHub,
+	provideProviderFactory,
+	provideOrchestrator,
+	provideUploadWorkerPool,
 )
 
 // HTTP/gRPC service providers
-var httpServiceProviderSet = wire.NewSet(service.NewUserService, service2.NewAuthService, provideGRPCAuthService, service3.NewAgentService, service4.NewAIProviderService, service4.NewAIModelService, service4.NewDocumentProviderService, service4.NewKnowledgeBaseService, service4.NewDocumentService, service5.NewTopicService, service5.NewMessageService, provideEmailService, handler.NewEmailHandler, handler.NewOAuth2Handler)
+var httpServiceProviderSet = wire.NewSet(service.NewUserService, service2.NewAuthService, provideGRPCAuthService, service3.NewAgentService, service4.NewAIProviderService, service4.NewAIModelService, service4.NewDocumentProviderService, service4.NewKnowledgeBaseService, service4.NewDocumentService, service5.NewAssistantService, service5.NewTopicService, service5.NewMessageService, service5.NewFavoriteService, provideEmailService, handler.NewEmailHandler, handler.NewOAuth2Handler)
 
 // Server providers
 var serverProviderSet = wire.NewSet(server.NewHTTPServer, server.NewGRPCServer, provideDocumentWorkerWithStart)
@@ -251,6 +282,34 @@ func provideZapLogger(log *logger.Logger) *zap.Logger {
 	return log.Logger
 }
 
+func provideDocumentUseCase(
+	documentRepo biz3.DocumentRepo,
+	chunkRepo biz3.ChunkRepo,
+	kbRepo biz3.KnowledgeBaseRepo,
+	aiModelRepo biz3.AIModelRepo,
+	aiProviderRepo biz3.AIProviderRepo,
+	fileStorageRepo biz3.FileStorageRepo,
+	storage biz3.StorageService,
+	vectorDB biz3.VectorDBService,
+	embedder biz3.EmbeddingService,
+	processor biz3.DocumentProcessor,
+	log *logger.Logger,
+) *biz3.DocumentUseCase {
+	return biz3.NewDocumentUseCase(
+		documentRepo,
+		chunkRepo,
+		kbRepo,
+		aiModelRepo,
+		aiProviderRepo,
+		fileStorageRepo,
+		storage,
+		vectorDB,
+		embedder,
+		processor,
+		log,
+	)
+}
+
 func provideUserRepo(d *data.Data) biz.UserRepo {
 	return data3.NewUserRepo(d.DB)
 }
@@ -295,12 +354,25 @@ func provideChunkRepo(d *data.Data) biz3.ChunkRepo {
 	return data2.NewChunkRepo(d.DBWrapper)
 }
 
+func provideFileStorageRepo(d *data.Data) biz3.FileStorageRepo {
+	kbrepo := data2.NewFileStorageRepository(d.DBWrapper)
+	return data2.NewFileStorageRepo(kbrepo)
+}
+
+func provideAssistantRepo(d *data.Data) biz4.AssistantRepo {
+	return data6.NewAssistantRepo(d.DB)
+}
+
 func provideTopicRepo(d *data.Data) biz4.TopicRepo {
 	return data6.NewTopicRepo(d.DBWrapper)
 }
 
 func provideMessageRepo(d *data.Data) biz4.MessageRepo {
 	return data6.NewMessageRepo(d.DBWrapper)
+}
+
+func provideFavoriteRepo(d *data.Data) biz4.FavoriteRepo {
+	return data6.NewFavoriteRepo(d.DBWrapper)
 }
 
 func provideModelSyncLogRepo(d *data.Data) biz3.ModelSyncLogRepo {
@@ -311,8 +383,22 @@ func provideEmbeddingService() biz3.EmbeddingService {
 	return embedding.NewEmbeddingService()
 }
 
-func provideDocumentProcessor() biz3.DocumentProcessor {
-	return processor.NewDocumentProcessor()
+func provideMinerUClient(config *conf.Config, log *logger.Logger) (*mineru.Client, error) {
+	cfg := &mineru.Config{
+		BaseURL:         config.MinerU.BaseURL,
+		APIKey:          config.MinerU.APIKey,
+		Timeout:         config.MinerU.Timeout,
+		MaxRetries:      config.MinerU.MaxRetries,
+		DefaultLanguage: config.MinerU.DefaultLanguage,
+		EnableFormula:   config.MinerU.EnableFormula,
+		EnableTable:     config.MinerU.EnableTable,
+		ModelVersion:    config.MinerU.ModelVersion,
+	}
+	return mineru.New(cfg, log)
+}
+
+func provideDocumentProcessor(client *mineru.Client, log *logger.Logger) biz3.DocumentProcessor {
+	return processor.NewMinerUProcessor(client, log)
 }
 
 func provideEmailConfig(config *conf.Config) *types.EmailConfig {
@@ -358,17 +444,77 @@ func provideEmailService(
 	return service6.NewEmailService(emailConfig, tokenProvider)
 }
 
+// provideProviderFactory 提供 AI Provider 工厂
+func provideProviderFactory(
+	aiProviderUseCase *biz3.AIProviderUseCase,
+	zapLogger *zap.Logger,
+) llm.ProviderFactory {
+	return providers.NewDatabaseProviderFactory(aiProviderUseCase, zapLogger)
+}
+
+// provideOrchestrator 提供多服务商编排器
+func provideOrchestrator(
+	providerFactory llm.ProviderFactory,
+	docUseCase *biz3.DocumentUseCase,
+	zapLogger *zap.Logger,
+) llm.MultiProviderOrchestrator {
+
+	knowledgeSearcher := llm.NewKnowledgeAdapter(docUseCase)
+
+	return llm.NewOrchestrator(
+		providerFactory,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		knowledgeSearcher,
+		zapLogger,
+	)
+}
+
+// provideUploadWorkerPool 提供上传文件 Worker Pool
+func provideUploadWorkerPool(
+	config *conf.Config,
+	log *logger.Logger,
+) (*workerpool.Pool, error) {
+
+	poolConfig := &workerpool.Config{
+		InitialWorkers: 2,
+		QueueSize:      1000,
+		EnablePriority: false,
+		AutoScaling: &workerpool.AutoScalingConfig{
+			Enable:                    true,
+			MinWorkers:                2,
+			MaxWorkers:                2,
+			ScaleUpQueueThreshold:     800,
+			ScaleUpUtilizationRatio:   0.8,
+			ScaleDownUtilizationRatio: 0.2,
+			ScaleUpStep:               1,
+			ScaleDownStep:             1,
+			CooldownPeriod:            30 * time.Second,
+			EnablePredictive:          true,
+		},
+	}
+
+	return workerpool.New(poolConfig, log.Logger)
+}
+
 func newApp(
 	config *conf.Config,
 	log *logger.Logger,
 	httpServer *server.HTTPServer,
 	grpcServer *server.GRPCServer,
 	documentWorker *queue.Worker,
+	uploadPool *workerpool.Pool,
 ) (*App, func()) {
 
 	cleanup := func() {
 		if documentWorker != nil {
 			documentWorker.Stop()
+		}
+		if uploadPool != nil {
+			uploadPool.Shutdown()
 		}
 	}
 

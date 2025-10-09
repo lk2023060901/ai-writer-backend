@@ -41,17 +41,24 @@ func getDefaultChunkSize(embeddingModel string) int {
 
 // KnowledgeBase 知识库业务对象
 type KnowledgeBase struct {
-	ID                 string
-	OwnerID            string // SystemOwnerID = 官方
-	Name               string
-	AIProviderConfigID string
-	ChunkSize          int
-	ChunkOverlap       int
-	ChunkStrategy      string
-	MilvusCollection   string
-	DocumentCount      int64
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID               string
+	OwnerID          string  // SystemOwnerID = 官方
+	Name             string
+	EmbeddingModelID string  // 使用的 Embedding 模型 ID
+	RerankModelID    *string // 使用的 Rerank 模型 ID（可选）
+	ChunkSize        int
+	ChunkOverlap     int
+	ChunkStrategy    string
+	MilvusCollection string
+	DocumentCount    int64
+
+	// 检索配置
+	Threshold           float32 // 相似度阈值（0.0-1.0），用于过滤低相关性结果，默认 0.0（不过滤）
+	TopK                int     // 返回文档数量，默认 5
+	EnableHybridSearch  bool    // 是否启用混合检索，默认 false
+
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // IsOfficial 是否为官方知识库
@@ -67,20 +74,28 @@ type KnowledgeBaseRepo interface {
 	Update(ctx context.Context, kb *KnowledgeBase) error
 	Delete(ctx context.Context, id string, ownerID string) error
 	IncrementDocumentCount(ctx context.Context, id string, delta int) error
+	BatchUpdateDocumentCounts(ctx context.Context, deltas map[string]int) error  // 批量更新文档计数
 }
 
 // CreateKnowledgeBaseRequest 创建知识库请求
 type CreateKnowledgeBaseRequest struct {
-	Name               string
-	AIProviderConfigID string  // 可选，不指定则自动选择
-	ChunkSize          *int    // 可选，不传则根据嵌入模型 max_context 自动设置
-	ChunkOverlap       *int    // 可选，不传则为 0（不重叠）
-	ChunkStrategy      *string // 可选，不传则为 "recursive"
+	Name             string
+	EmbeddingModelID string   // 必填，Embedding 模型 ID
+	RerankModelID    *string  // 可选，Rerank 模型 ID
+	ChunkSize        *int     // 可选，不传则根据嵌入模型 max_context 自动设置
+	ChunkOverlap     *int     // 可选，不传则为 0（不重叠）
+	ChunkStrategy    *string  // 可选，不传则为 "recursive"
+	Threshold        *float32 // 可选，相似度阈值（0.0-1.0），默认 0.0（不过滤）
+	TopK             *int     // 可选，返回文档数量（1-20），默认 5
+	EnableHybridSearch *bool  // 可选，是否启用混合检索，默认 false
 }
 
 // UpdateKnowledgeBaseRequest 更新知识库请求
 type UpdateKnowledgeBaseRequest struct {
-	Name *string
+	Name               *string
+	Threshold          *float32 // 可选，相似度阈值
+	TopK               *int     // 可选，返回文档数量
+	EnableHybridSearch *bool    // 可选，是否启用混合检索
 }
 
 // ListKnowledgeBasesRequest 知识库列表请求
@@ -93,18 +108,18 @@ type ListKnowledgeBasesRequest struct {
 
 // KnowledgeBaseUseCase 知识库用例
 type KnowledgeBaseUseCase struct {
-	kbRepo       KnowledgeBaseRepo
-	aiConfigRepo AIProviderConfigRepo
+	kbRepo      KnowledgeBaseRepo
+	aiModelRepo AIModelRepo
 }
 
 // NewKnowledgeBaseUseCase 创建知识库用例
 func NewKnowledgeBaseUseCase(
 	kbRepo KnowledgeBaseRepo,
-	aiConfigRepo AIProviderConfigRepo,
+	aiModelRepo AIModelRepo,
 ) *KnowledgeBaseUseCase {
 	return &KnowledgeBaseUseCase{
-		kbRepo:       kbRepo,
-		aiConfigRepo: aiConfigRepo,
+		kbRepo:      kbRepo,
+		aiModelRepo: aiModelRepo,
 	}
 }
 
@@ -118,27 +133,14 @@ func (uc *KnowledgeBaseUseCase) CreateKnowledgeBase(
 	if req.Name == "" {
 		return nil, ErrKnowledgeBaseNameRequired
 	}
+	if req.EmbeddingModelID == "" {
+		return nil, ErrAIProviderNotFound
+	}
 
-	// 1. 解析 AI 配置
-	var aiConfig *AIProviderConfig
-	var err error
-
-	if req.AIProviderConfigID != "" {
-		// 使用指定的配置
-		aiConfig, err = uc.aiConfigRepo.GetByID(ctx, req.AIProviderConfigID, userID)
-		if err != nil {
-			return nil, err
-		}
-		// 验证：必须是官方配置 或 用户自己的配置
-		if !aiConfig.IsOfficial() && aiConfig.OwnerID != userID {
-			return nil, ErrUnauthorized
-		}
-	} else {
-		// 自动选择可用配置
-		aiConfig, err = uc.aiConfigRepo.GetFirstAvailable(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
+	// 1. 获取 AI Model 信息
+	aiModel, err := uc.aiModelRepo.GetByID(ctx, req.EmbeddingModelID)
+	if err != nil {
+		return nil, err
 	}
 
 	// 2. 设置默认值（类似 Cherry Studio 的逻辑）
@@ -148,7 +150,7 @@ func (uc *KnowledgeBaseUseCase) CreateKnowledgeBase(
 	} else {
 		// 根据嵌入模型设置默认 chunkSize
 		// BAAI/bge-m3: 8191, text-embedding-3-small: 8191, 其他默认 512
-		chunkSize = getDefaultChunkSize(aiConfig.EmbeddingModel)
+		chunkSize = getDefaultChunkSize(aiModel.ModelName)
 	}
 
 	var chunkOverlap int
@@ -166,12 +168,34 @@ func (uc *KnowledgeBaseUseCase) CreateKnowledgeBase(
 		chunkStrategy = "recursive"
 	}
 
+	// 设置检索配置默认值
+	threshold := float32(0.0) // 默认不过滤任何结果
+	if req.Threshold != nil {
+		threshold = *req.Threshold
+	}
+
+	topK := 5
+	if req.TopK != nil {
+		topK = *req.TopK
+	}
+
+	enableHybridSearch := false
+	if req.EnableHybridSearch != nil {
+		enableHybridSearch = *req.EnableHybridSearch
+	}
+
 	// 验证参数
 	if chunkSize < 100 || chunkSize > 10000 {
 		return nil, ErrKnowledgeBaseInvalidChunkSize
 	}
 	if chunkOverlap < 0 || chunkOverlap >= chunkSize {
 		return nil, ErrKnowledgeBaseInvalidOverlap
+	}
+	if threshold < 0.0 || threshold > 1.0 {
+		return nil, fmt.Errorf("threshold must be between 0.0 and 1.0")
+	}
+	if topK < 1 || topK > 20 {
+		return nil, fmt.Errorf("top_k must be between 1 and 20")
 	}
 
 	// 3. 生成 Milvus Collection 名称
@@ -184,17 +208,21 @@ func (uc *KnowledgeBaseUseCase) CreateKnowledgeBase(
 	// 5. 创建知识库
 	now := time.Now()
 	kb := &KnowledgeBase{
-		ID:                 uuid.New().String(),
-		OwnerID:            userID,
-		Name:               req.Name,
-		AIProviderConfigID: aiConfig.ID,
-		ChunkSize:          chunkSize,
-		ChunkOverlap:       chunkOverlap,
-		ChunkStrategy:      chunkStrategy,
-		MilvusCollection:   collectionName,
-		DocumentCount:      0,
-		CreatedAt:          now,
-		UpdatedAt:          now,
+		ID:               uuid.New().String(),
+		OwnerID:          userID,
+		Name:             req.Name,
+		EmbeddingModelID: req.EmbeddingModelID,
+		RerankModelID:    req.RerankModelID,
+		ChunkSize:        chunkSize,
+		ChunkOverlap:     chunkOverlap,
+		ChunkStrategy:    chunkStrategy,
+		MilvusCollection: collectionName,
+		DocumentCount:    0,
+		Threshold:        threshold,
+		TopK:             topK,
+		EnableHybridSearch: enableHybridSearch,
+		CreatedAt:        now,
+		UpdatedAt:        now,
 	}
 
 	if err := uc.kbRepo.Create(ctx, kb); err != nil {
@@ -250,6 +278,26 @@ func (uc *KnowledgeBaseUseCase) UpdateKnowledgeBase(
 	if req.Name != nil {
 		kb.Name = *req.Name
 	}
+
+	// 更新检索配置
+	if req.Threshold != nil {
+		if *req.Threshold < 0.0 || *req.Threshold > 1.0 {
+			return nil, fmt.Errorf("threshold must be between 0.0 and 1.0")
+		}
+		kb.Threshold = *req.Threshold
+	}
+
+	if req.TopK != nil {
+		if *req.TopK < 1 || *req.TopK > 20 {
+			return nil, fmt.Errorf("top_k must be between 1 and 20")
+		}
+		kb.TopK = *req.TopK
+	}
+
+	if req.EnableHybridSearch != nil {
+		kb.EnableHybridSearch = *req.EnableHybridSearch
+	}
+
 	kb.UpdatedAt = time.Now()
 
 	if err := uc.kbRepo.Update(ctx, kb); err != nil {

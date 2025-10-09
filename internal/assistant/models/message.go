@@ -13,6 +13,8 @@ type Message struct {
 	Role          string         `gorm:"type:varchar(20);not null" json:"role"` // user | assistant
 	ContentBlocks ContentBlocks  `gorm:"type:jsonb;not null" json:"content_blocks"`
 	TokenCount    *int           `gorm:"type:integer" json:"token_count,omitempty"`
+	Provider      string         `gorm:"type:varchar(50)" json:"provider,omitempty"`      // AI provider
+	Model         string         `gorm:"type:varchar(100)" json:"model,omitempty"`        // AI model
 	CreatedAt     time.Time      `gorm:"not null" json:"created_at"`
 }
 

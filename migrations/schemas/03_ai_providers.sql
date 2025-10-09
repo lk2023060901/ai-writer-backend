@@ -1,56 +1,31 @@
 -- AI 服务商配置模块
--- 包含：AI 服务商配置表（支持 Embedding、Chat、Rerank）
+-- 系统预设的 AI 服务商列表（只读，用户不可添加/删除）
 
-CREATE TABLE ai_provider_configs (
+CREATE TABLE ai_providers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-
-    -- 所有者 ID（'00000000-0000-0000-0000-000000000000' = 官方配置）
-    owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
-
-    -- 服务商信息
-    provider_type VARCHAR(50) NOT NULL,
+    provider_type VARCHAR(50) NOT NULL UNIQUE,
     provider_name VARCHAR(100) NOT NULL,
-
-    -- 认证配置（测试阶段明文存储）
-    api_key TEXT NOT NULL,
-    api_base_url VARCHAR(255),
-
-    -- Embedding 模型配置
-    embedding_model VARCHAR(100) NOT NULL,
-    embedding_dimensions INTEGER NOT NULL,
-
-    -- 能力标识（预留）
-    supports_chat BOOLEAN DEFAULT false,
-    supports_embedding BOOLEAN DEFAULT true,
-    supports_rerank BOOLEAN DEFAULT false,
-
-    -- 配额管理（用户配置用）
-    monthly_quota BIGINT,
-    used_tokens BIGINT DEFAULT 0,
-    quota_reset_at TIMESTAMPTZ,
-
-    -- 状态
+    api_base_url VARCHAR(255) NOT NULL,
+    api_key TEXT,  -- 开发阶段明文存储，生产环境建议加密或使用环境变量
     is_enabled BOOLEAN DEFAULT true,
-
-    -- 时间戳
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMPTZ,
-
-    -- 外键约束
-    CONSTRAINT fk_provider_owner FOREIGN KEY (owner_id)
-        REFERENCES users(id) ON DELETE CASCADE
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 索引
-CREATE INDEX idx_provider_owner ON ai_provider_configs(owner_id);
-CREATE INDEX idx_provider_type ON ai_provider_configs(provider_type);
-CREATE INDEX idx_provider_enabled ON ai_provider_configs(is_enabled);
-CREATE INDEX idx_provider_deleted ON ai_provider_configs(deleted_at);
+CREATE INDEX idx_ai_providers_type ON ai_providers(provider_type);
 
 -- 注释
-COMMENT ON TABLE ai_provider_configs IS 'AI 服务商配置表：支持多种 AI 服务商（OpenAI、Claude、本地模型等）';
-COMMENT ON COLUMN ai_provider_configs.owner_id IS '所有者 ID，00000000-0000-0000-0000-000000000000 表示官方配置';
-COMMENT ON COLUMN ai_provider_configs.provider_type IS '服务商类型：openai、anthropic、local 等';
-COMMENT ON COLUMN ai_provider_configs.api_key IS 'API 密钥，测试阶段明文存储（TODO: 生产环境需加密）';
-COMMENT ON COLUMN ai_provider_configs.embedding_dimensions IS 'Embedding 向量维度，用于创建 Milvus collection';
+COMMENT ON TABLE ai_providers IS 'AI 服务商配置';
+COMMENT ON COLUMN ai_providers.id IS '主键ID';
+COMMENT ON COLUMN ai_providers.provider_type IS '提供商类型（唯一标识）';
+COMMENT ON COLUMN ai_providers.provider_name IS '提供商显示名称';
+COMMENT ON COLUMN ai_providers.api_base_url IS 'API 基础地址';
+COMMENT ON COLUMN ai_providers.api_key IS 'API 密钥（开发环境明文，生产环境使用环境变量）';
+COMMENT ON COLUMN ai_providers.is_enabled IS '是否启用';
+
+-- 插入预设数据
+INSERT INTO ai_providers (provider_type, provider_name, api_base_url, api_key, is_enabled) VALUES
+('siliconflow', '硅基流动', 'https://api.siliconflow.cn/v1', NULL, true),
+('openai', 'OpenAI', 'https://api.openai.com/v1', NULL, true),
+('anthropic', 'Anthropic', 'https://api.anthropic.com/v1', NULL, true);

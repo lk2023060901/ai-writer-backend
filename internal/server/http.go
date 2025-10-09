@@ -31,8 +31,10 @@ type HTTPServer struct {
 	documentProviderService *kbservice.DocumentProviderService
 	kbService               *kbservice.KnowledgeBaseService
 	documentService         *kbservice.DocumentService
+	assistantService        *assistantservice.AssistantService
 	topicService            *assistantservice.TopicService
 	messageService          *assistantservice.MessageService
+	favoriteService         *assistantservice.FavoriteService
 	emailHandler            *emailhandler.EmailHandler
 	oauth2Handler           *emailhandler.OAuth2Handler
 }
@@ -48,8 +50,10 @@ func NewHTTPServer(
 	documentProviderService *kbservice.DocumentProviderService,
 	kbService *kbservice.KnowledgeBaseService,
 	documentService *kbservice.DocumentService,
+	assistantService *assistantservice.AssistantService,
 	topicService *assistantservice.TopicService,
 	messageService *assistantservice.MessageService,
+	favoriteService *assistantservice.FavoriteService,
 	emailHandler *emailhandler.EmailHandler,
 	oauth2Handler *emailhandler.OAuth2Handler,
 	redisClient *redis.Client,
@@ -130,6 +134,8 @@ func NewHTTPServer(
 		{
 			aiProviders.GET("", aiConfigService.ListAIProviders)
 			aiProviders.GET("/with-models", aiConfigService.ListAllProvidersWithModels) // 新增：获取所有服务商及其模型
+			aiProviders.PATCH("/:id/status", aiConfigService.UpdateAIProviderStatus)     // 更新服务商启用状态
+			aiProviders.PUT("/:id", aiConfigService.UpdateAIProvider)                    // 更新服务商配置（API Key 和 API 地址）
 
 			// AI Models routes (nested under providers)
 			aiProviders.GET("/:provider_id/models", aiModelService.HandleListModelsByProvider)
@@ -161,9 +167,11 @@ func NewHTTPServer(
 			kbs.DELETE("/:id", kbService.DeleteKnowledgeBase)
 
 			// Document routes (nested under knowledge bases)
-			kbs.POST("/:id/documents", documentService.UploadDocument) // 上传文档 (返回 SSE 流)
+			kbs.POST("/:id/documents/upload", documentService.UploadDocument)              // 单文件上传（返回 JSON）
+			kbs.POST("/:id/documents/batch-upload", documentService.BatchUploadDocuments) // 批量上传文档（返回 SSE）
 			kbs.GET("/:id/documents", documentService.ListDocuments)
-			kbs.GET("/:id/document-stream/:doc_id", documentService.StreamDocumentStatus) // SSE (独立路径避免冲突)
+			kbs.POST("/:id/documents/batch-delete", documentService.BatchDeleteDocuments)  // 批量删除文档
+			kbs.GET("/:id/document-stream/:doc_id", documentService.StreamDocumentStatus)  // SSE (独立路径避免冲突)
 			kbs.GET("/:id/documents/:doc_id", documentService.GetDocument)
 			kbs.DELETE("/:id/documents/:doc_id", documentService.DeleteDocument)
 			kbs.POST("/:id/documents/:doc_id/reprocess", documentService.ReprocessDocument)
@@ -175,6 +183,15 @@ func NewHTTPServer(
 
 		// Message routes (protected)
 		messageService.RegisterRoutes(protectedAPI)
+
+		// Favorite routes (protected)
+		favoriteService.RegisterRoutes(protectedAPI)
+
+		// Chat routes (protected) - Multi-provider streaming chat
+		chat := protectedAPI.Group("/chat")
+		{
+			chat.POST("/stream", assistantService.ChatStreamV2)
+		}
 
 		// Email routes (protected)
 		email := protectedAPI.Group("/email")
@@ -202,8 +219,10 @@ func NewHTTPServer(
 		documentProviderService: documentProviderService,
 		kbService:               kbService,
 		documentService:         documentService,
+		assistantService:        assistantService,
 		topicService:            topicService,
 		messageService:          messageService,
+		favoriteService:         favoriteService,
 		emailHandler:            emailHandler,
 		oauth2Handler:           oauth2Handler,
 	}

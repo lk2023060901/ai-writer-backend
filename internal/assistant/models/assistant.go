@@ -35,6 +35,7 @@ func (Assistant) TableName() string {
 type Topic struct {
 	ID          string `gorm:"primaryKey;type:varchar(36)"`
 	AssistantID string `gorm:"type:varchar(36);not null;index"`
+	UserID      string `gorm:"type:varchar(36);not null;index"`
 	Name        string `gorm:"type:varchar(255);not null"`
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

@@ -1,0 +1,60 @@
+package service
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/lk2023060901/ai-writer-backend/internal/knowledge/biz"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/response"
+	"go.uber.org/zap"
+)
+
+// AIProviderService AI服务商 HTTP 服务（只读）
+type AIProviderService struct {
+	uc     *biz.AIProviderUseCase
+	logger *logger.Logger
+}
+
+// NewAIProviderService 创建AI服务商服务
+func NewAIProviderService(uc *biz.AIProviderUseCase, logger *logger.Logger) *AIProviderService {
+	return &AIProviderService{
+		uc:     uc,
+		logger: logger,
+	}
+}
+
+// ListAIProviders 获取AI服务商列表（系统预设，只读）
+func (s *AIProviderService) ListAIProviders(c *gin.Context) {
+	providers, err := s.uc.ListAIProviders(c.Request.Context())
+	if err != nil {
+		s.logger.Error("failed to list AI providers", zap.Error(err))
+		response.InternalError(c, "获取AI服务商列表失败")
+		return
+	}
+
+	items := make([]*AIProviderResponse, len(providers))
+	for i, provider := range providers {
+		items[i] = toAIProviderResponse(provider)
+	}
+
+	response.Success(c, items)
+}
+
+// toAIProviderResponse 转换为响应对象
+func toAIProviderResponse(provider *biz.AIProvider) *AIProviderResponse {
+	return &AIProviderResponse{
+		ID:           provider.ID,
+		ProviderType: provider.ProviderType,
+		ProviderName: provider.ProviderName,
+		APIBaseURL:   provider.APIBaseURL,
+		IsEnabled:    provider.IsEnabled,
+	}
+}
+
+// AIProviderResponse AI服务商响应
+type AIProviderResponse struct {
+	ID           string `json:"id"`
+	ProviderType string `json:"provider_type"`
+	ProviderName string `json:"provider_name"`
+	APIBaseURL   string `json:"api_base_url"`
+	IsEnabled    bool   `json:"is_enabled"`
+}

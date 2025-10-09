@@ -16,6 +16,8 @@ type Client struct {
 	ID       string
 	Channel  chan Event
 	Resource string // 订阅的资源 ID (如 doc:xxx, chat:xxx)
+	closed   bool   // 标记 channel 是否已关闭
+	mu       sync.Mutex
 }
 
 // Hub SSE 连接管理器
@@ -50,7 +52,14 @@ func (h *Hub) Unregister(client *Client) {
 	if clients, ok := h.clients[client.Resource]; ok {
 		if _, exists := clients[client]; exists {
 			delete(clients, client)
-			close(client.Channel)
+
+			// 安全关闭 channel
+			client.mu.Lock()
+			if !client.closed {
+				close(client.Channel)
+				client.closed = true
+			}
+			client.mu.Unlock()
 
 			// 清理空资源
 			if len(clients) == 0 {
@@ -67,11 +76,29 @@ func (h *Hub) Broadcast(resource string, event Event) {
 
 	if clients, ok := h.clients[resource]; ok {
 		for client := range clients {
-			select {
-			case client.Channel <- event:
-			default:
-				// 客户端缓冲区满,跳过
+			// 检查 channel 是否已关闭
+			client.mu.Lock()
+			closed := client.closed
+			client.mu.Unlock()
+
+			if closed {
+				continue
 			}
+
+			// 使用 defer recover 作为双重保险
+			func(c *Client) {
+				defer func() {
+					if r := recover(); r != nil {
+						// channel 已关闭，静默忽略
+					}
+				}()
+
+				select {
+				case c.Channel <- event:
+				default:
+					// 客户端缓冲区满,跳过
+				}
+			}(client)
 		}
 	}
 }
@@ -84,10 +111,28 @@ func (h *Hub) Send(clientID string, event Event) {
 	for _, clients := range h.clients {
 		for client := range clients {
 			if client.ID == clientID {
-				select {
-				case client.Channel <- event:
-				default:
+				// 检查 channel 是否已关闭
+				client.mu.Lock()
+				closed := client.closed
+				client.mu.Unlock()
+
+				if closed {
+					return
 				}
+
+				// 使用 defer recover 作为双重保险
+				func(c *Client) {
+					defer func() {
+						if r := recover(); r != nil {
+							// channel 已关闭，静默忽略
+						}
+					}()
+
+					select {
+					case c.Channel <- event:
+					default:
+					}
+				}(client)
 				return
 			}
 		}

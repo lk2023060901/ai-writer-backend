@@ -22,6 +22,7 @@ func NewFactory() *Factory {
 	factory.registerLoader(NewMarkdownLoader())
 	factory.registerLoader(NewPDFLoader())
 	factory.registerLoader(NewDOCXLoader())
+	factory.registerLoader(NewJSONLoader())
 
 	return factory
 }

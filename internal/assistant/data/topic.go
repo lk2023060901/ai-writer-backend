@@ -59,6 +59,24 @@ func (r *TopicRepo) ListByAssistant(ctx context.Context, assistantID string) ([]
 	return topics, nil
 }
 
+// ListByUserID lists all topics for a user (across all their assistants)
+func (r *TopicRepo) ListByUserID(ctx context.Context, userID string) ([]*types.Topic, error) {
+	var modelList []models.Topic
+	if err := r.db.WithContext(ctx).
+		Where("user_id = ?", userID).
+		Order("updated_at DESC").
+		Find(&modelList).Error; err != nil {
+		return nil, fmt.Errorf("failed to list topics by user: %w", err)
+	}
+
+	topics := make([]*types.Topic, 0, len(modelList))
+	for _, model := range modelList {
+		topics = append(topics, r.toDomain(&model))
+	}
+
+	return topics, nil
+}
+
 // Update updates an existing topic
 func (r *TopicRepo) Update(ctx context.Context, topic *types.Topic) error {
 	model := r.toModel(topic)
@@ -91,6 +109,7 @@ func (r *TopicRepo) toModel(topic *types.Topic) *models.Topic {
 	return &models.Topic{
 		ID:          topic.ID,
 		AssistantID: topic.AssistantID,
+		UserID:      topic.UserID,
 		Name:        topic.Name,
 		CreatedAt:   topic.CreatedAt,
 		UpdatedAt:   topic.UpdatedAt,
@@ -102,6 +121,7 @@ func (r *TopicRepo) toDomain(model *models.Topic) *types.Topic {
 	return &types.Topic{
 		ID:          model.ID,
 		AssistantID: model.AssistantID,
+		UserID:      model.UserID,
 		Name:        model.Name,
 		CreatedAt:   model.CreatedAt,
 		UpdatedAt:   model.UpdatedAt,

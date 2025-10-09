@@ -1,7 +1,7 @@
 package service
 
 import (
-	"errors"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/lk2023060901/ai-writer-backend/internal/knowledge/biz"
@@ -10,199 +10,230 @@ import (
 	"go.uber.org/zap"
 )
 
-// AIProviderService AI服务商配置 HTTP 服务
+// AIProviderService AI服务商 HTTP 服务（只读）
 type AIProviderService struct {
-	uc     *biz.AIProviderConfigUseCase
-	logger *logger.Logger
+	uc      *biz.AIProviderUseCase
+	modelUC *biz.AIModelUseCase
+	logger  *logger.Logger
 }
 
-// NewAIProviderService 创建AI服务商配置服务
-func NewAIProviderService(uc *biz.AIProviderConfigUseCase, logger *logger.Logger) *AIProviderService {
+// NewAIProviderService 创建AI服务商服务
+func NewAIProviderService(uc *biz.AIProviderUseCase, modelUC *biz.AIModelUseCase, logger *logger.Logger) *AIProviderService {
 	return &AIProviderService{
-		uc:     uc,
-		logger: logger,
+		uc:      uc,
+		modelUC: modelUC,
+		logger:  logger,
 	}
 }
 
-// CreateAIProviderConfig 创建AI服务商配置
-func (s *AIProviderService) CreateAIProviderConfig(c *gin.Context) {
-	var req CreateAIProviderConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
-		return
-	}
-
-	userID := c.GetString("user_id")
-	if userID == "" {
-		response.Unauthorized(c, "unauthorized")
-		return
-	}
-
-	config, err := s.uc.CreateAIProviderConfig(c.Request.Context(), userID, &biz.CreateAIProviderConfigRequest{
-		ProviderType:        req.ProviderType,
-		ProviderName:        req.ProviderName,
-		APIKey:              req.APIKey,
-		APIBaseURL:          req.APIBaseURL,
-		EmbeddingModel:      req.EmbeddingModel,
-		EmbeddingDimensions: req.EmbeddingDimensions,
-	})
-
+// ListAIProviders 获取AI服务商列表
+func (s *AIProviderService) ListAIProviders(c *gin.Context) {
+	providers, err := s.uc.ListAIProviders(c.Request.Context())
 	if err != nil {
-		s.handleError(c, err)
+		s.logger.Error("failed to list AI providers", zap.Error(err))
+		response.InternalError(c, "获取AI服务商列表失败")
 		return
 	}
 
-	response.Created(c, toAIProviderConfigResponse(config, userID))
-}
-
-// ListAIProviderConfigs 获取AI服务商配置列表
-func (s *AIProviderService) ListAIProviderConfigs(c *gin.Context) {
-	userID := c.GetString("user_id")
-	if userID == "" {
-		response.Unauthorized(c, "unauthorized")
-		return
-	}
-
-	configs, err := s.uc.ListAIProviderConfigs(c.Request.Context(), userID)
-	if err != nil {
-		s.handleError(c, err)
-		return
-	}
-
-	items := make([]*AIProviderConfigResponse, len(configs))
-	for i, config := range configs {
-		items[i] = toAIProviderConfigResponse(config, userID)
+	items := make([]*AIProviderResponse, len(providers))
+	for i, provider := range providers {
+		items[i] = toAIProviderResponse(provider)
 	}
 
 	response.Success(c, items)
 }
 
-// GetAIProviderConfig 获取AI服务商配置详情
-func (s *AIProviderService) GetAIProviderConfig(c *gin.Context) {
-	id := c.Param("id")
-	userID := c.GetString("user_id")
-	if userID == "" {
-		response.Unauthorized(c, "unauthorized")
+// UpdateAIProviderStatus 更新AI服务商启用状态
+func (s *AIProviderService) UpdateAIProviderStatus(c *gin.Context) {
+	providerID := c.Param("id")
+	if providerID == "" {
+		response.BadRequest(c, "provider ID is required")
 		return
 	}
 
-	config, err := s.uc.GetAIProviderConfig(c.Request.Context(), id, userID)
-	if err != nil {
-		s.handleError(c, err)
-		return
-	}
-
-	response.Success(c, toAIProviderConfigResponse(config, userID))
-}
-
-// UpdateAIProviderConfig 更新AI服务商配置
-func (s *AIProviderService) UpdateAIProviderConfig(c *gin.Context) {
-	id := c.Param("id")
-	var req UpdateAIProviderConfigRequest
+	var req UpdateProviderStatusRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+		response.BadRequest(c, "invalid request body")
 		return
 	}
 
-	userID := c.GetString("user_id")
-	if userID == "" {
-		response.Unauthorized(c, "unauthorized")
+	// 更新服务商状态
+	if err := s.uc.UpdateProviderStatus(c.Request.Context(), providerID, *req.IsEnabled); err != nil {
+		s.logger.Error("failed to update provider status",
+			zap.String("provider_id", providerID),
+			zap.Bool("is_enabled", *req.IsEnabled),
+			zap.Error(err))
+		response.InternalError(c, "更新服务商状态失败")
 		return
 	}
 
-	config, err := s.uc.UpdateAIProviderConfig(c.Request.Context(), id, userID, &biz.UpdateAIProviderConfigRequest{
-		ProviderName:        req.ProviderName,
-		APIKey:              req.APIKey,
-		APIBaseURL:          req.APIBaseURL,
-		EmbeddingModel:      req.EmbeddingModel,
-		EmbeddingDimensions: req.EmbeddingDimensions,
-	})
-
+	// 返回更新后的服务商信息
+	provider, err := s.uc.GetAIProviderByID(c.Request.Context(), providerID)
 	if err != nil {
-		s.handleError(c, err)
+		s.logger.Error("failed to get updated provider", zap.Error(err))
+		response.InternalError(c, "获取更新后的服务商信息失败")
 		return
 	}
 
-	response.Success(c, toAIProviderConfigResponse(config, userID))
+	response.Success(c, toAIProviderResponse(provider))
 }
 
-// DeleteAIProviderConfig 删除AI服务商配置
-func (s *AIProviderService) DeleteAIProviderConfig(c *gin.Context) {
-	id := c.Param("id")
-	userID := c.GetString("user_id")
-	if userID == "" {
-		response.Unauthorized(c, "unauthorized")
+// UpdateAIProvider 更新AI服务商配置（API Key 和 API 地址）
+func (s *AIProviderService) UpdateAIProvider(c *gin.Context) {
+	providerID := c.Param("id")
+	if providerID == "" {
+		response.BadRequest(c, "provider ID is required")
 		return
 	}
 
-	err := s.uc.DeleteAIProviderConfig(c.Request.Context(), id, userID)
+	var req UpdateAIProviderRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "invalid request body")
+		return
+	}
+
+	// 更新服务商配置
+	if err := s.uc.UpdateProviderConfig(c.Request.Context(), providerID, req.APIKey, req.APIBaseURL); err != nil {
+		s.logger.Error("failed to update provider config",
+			zap.String("provider_id", providerID),
+			zap.Error(err))
+		response.InternalError(c, "更新服务商配置失败")
+		return
+	}
+
+	// 返回更新后的服务商信息
+	provider, err := s.uc.GetAIProviderByID(c.Request.Context(), providerID)
 	if err != nil {
-		s.handleError(c, err)
+		s.logger.Error("failed to get updated provider", zap.Error(err))
+		response.InternalError(c, "获取更新后的服务商信息失败")
 		return
 	}
 
-	response.Success(c, struct{}{})
+	response.Success(c, toAIProviderResponse(provider))
 }
 
-// handleError 处理错误
-func (s *AIProviderService) handleError(c *gin.Context, err error) {
-	s.logger.Error("AI Provider config operation failed", zap.Error(err))
-
-	switch {
-	case errors.Is(err, biz.ErrAIProviderConfigNotFound):
-		response.NotFound(c, err.Error())
-	case errors.Is(err, biz.ErrAIProviderConfigNameRequired),
-		errors.Is(err, biz.ErrAIProviderConfigAPIKeyRequired),
-		errors.Is(err, biz.ErrAIProviderConfigInvalidProvider):
-		response.BadRequest(c, err.Error())
-	case errors.Is(err, biz.ErrUnauthorized):
-		response.Forbidden(c, err.Error())
-	case errors.Is(err, biz.ErrCannotEditOfficialResource),
-		errors.Is(err, biz.ErrCannotDeleteOfficialResource):
-		response.Forbidden(c, err.Error())
-	case errors.Is(err, biz.ErrAIProviderConfigInUse):
-		response.BadRequest(c, err.Error())
-	default:
-		response.InternalError(c, "internal server error")
+// ListAllProvidersWithModels 获取所有AI服务商及其模型列表
+func (s *AIProviderService) ListAllProvidersWithModels(c *gin.Context) {
+	// 获取所有服务商
+	providers, err := s.uc.ListAIProviders(c.Request.Context())
+	if err != nil {
+		s.logger.Error("failed to list AI providers", zap.Error(err))
+		response.InternalError(c, "获取AI服务商列表失败")
+		return
 	}
-}
 
-// toAIProviderConfigResponse 转换为响应对象
-func toAIProviderConfigResponse(config *biz.AIProviderConfig, currentUserID string) *AIProviderConfigResponse {
-	// 官方配置：仅返回 ID 和名称
-	if config.IsOfficial() {
-		return &AIProviderConfigResponse{
-			ID:           config.ID,
-			ProviderName: config.ProviderName,
-			IsOfficial:   true,
+	// 为每个服务商获取模型列表
+	result := make([]*ProviderWithModelsResponse, len(providers))
+	for i, provider := range providers {
+		models, err := s.modelUC.ListAIModelsByProviderID(c.Request.Context(), provider.ID)
+		if err != nil {
+			s.logger.Error("failed to list models for provider",
+				zap.String("provider_id", provider.ID),
+				zap.Error(err))
+			// 如果获取模型失败，返回空数组而不是整个请求失败
+			models = []*biz.AIModel{}
+		}
+
+		// 转换模型列表
+		modelResponses := make([]*AIModelSimpleResponse, len(models))
+		for j, model := range models {
+			modelResponses[j] = toAIModelSimpleResponse(model)
+		}
+
+		result[i] = &ProviderWithModelsResponse{
+			ID:           provider.ID,
+			ProviderType: provider.ProviderType,
+			ProviderName: provider.ProviderName,
+			APIBaseURL:   provider.APIBaseURL,
+			APIKey:       provider.APIKey,
+			IsEnabled:    provider.IsEnabled,
+			Models:       modelResponses,
 		}
 	}
 
-	// 用户配置：返回完整信息（API Key 脱敏）
-	createdAt := config.CreatedAt.Format("2006-01-02T15:04:05Z07:00")
-	updatedAt := config.UpdatedAt.Format("2006-01-02T15:04:05Z07:00")
-	maskedAPIKey := MaskAPIKey(config.APIKey)
+	response.Success(c, result)
+}
 
-	return &AIProviderConfigResponse{
-		ID:                  config.ID,
-		ProviderName:        config.ProviderName,
-		IsOfficial:          false,
-		OwnerID:             &config.OwnerID,
-		ProviderType:        &config.ProviderType,
-		APIKey:              &maskedAPIKey,
-		APIBaseURL:          &config.APIBaseURL,
-		EmbeddingModel:      &config.EmbeddingModel,
-		EmbeddingDimensions: &config.EmbeddingDimensions,
-		IsEnabled:           &config.IsEnabled,
-		CreatedAt:           &createdAt,
-		UpdatedAt:           &updatedAt,
+// toAIProviderResponse 转换为响应对象
+func toAIProviderResponse(provider *biz.AIProvider) *AIProviderResponse {
+	return &AIProviderResponse{
+		ID:           provider.ID,
+		ProviderType: provider.ProviderType,
+		ProviderName: provider.ProviderName,
+		APIBaseURL:   provider.APIBaseURL,
+		APIKey:       provider.APIKey,
+		IsEnabled:    provider.IsEnabled,
 	}
 }
 
-// MaskAPIKey API Key 脱敏（保留前4位和后4位）
-func MaskAPIKey(apiKey string) string {
-	if len(apiKey) <= 8 {
-		return "********"
+// toAIModelSimpleResponse 转换为简化的模型响应
+func toAIModelSimpleResponse(model *biz.AIModel) *AIModelSimpleResponse {
+	return &AIModelSimpleResponse{
+		ID:                      model.ID,
+		ModelName:               model.ModelName,
+		DisplayName:             model.DisplayName,
+		MaxTokens:               model.MaxTokens,
+		IsEnabled:               model.IsEnabled,
+		VerificationStatus:      model.VerificationStatus,
+		Capabilities:            model.Capabilities,
+		SupportsStream:          model.SupportsStream,
+		SupportsVision:          model.SupportsVision,
+		SupportsFunctionCalling: model.SupportsFunctionCalling,
+		SupportsReasoning:       model.SupportsReasoning,
+		SupportsWebSearch:       model.SupportsWebSearch,
+		EmbeddingDimensions:     model.EmbeddingDimensions,
+		CreatedAt:               model.CreatedAt,
+		UpdatedAt:               model.UpdatedAt,
 	}
-	return apiKey[:4] + "********" + apiKey[len(apiKey)-4:]
+}
+
+// UpdateProviderStatusRequest 更新服务商状态请求
+type UpdateProviderStatusRequest struct {
+	IsEnabled *bool `json:"is_enabled" binding:"required"`
+}
+
+// UpdateAIProviderRequest 更新AI服务商配置请求
+type UpdateAIProviderRequest struct {
+	APIKey     *string `json:"api_key"`      // API密钥（可选）
+	APIBaseURL *string `json:"api_base_url"` // API基础URL（可选）
+}
+
+// AIProviderResponse AI服务商响应
+type AIProviderResponse struct {
+	ID           string `json:"id"`
+	ProviderType string `json:"provider_type"`
+	ProviderName string `json:"provider_name"`
+	APIBaseURL   string `json:"api_base_url"`
+	APIKey       string `json:"api_key"`
+	IsEnabled    bool   `json:"is_enabled"`
+}
+
+// ProviderWithModelsResponse AI服务商及其模型响应
+type ProviderWithModelsResponse struct {
+	ID           string                   `json:"id"`
+	ProviderType string                   `json:"provider_type"`
+	ProviderName string                   `json:"provider_name"`
+	APIBaseURL   string                   `json:"api_base_url"`
+	APIKey       string                   `json:"api_key"`
+	IsEnabled    bool                     `json:"is_enabled"`
+	Models       []*AIModelSimpleResponse `json:"models"`
+}
+
+// AIModelSimpleResponse 简化的AI模型响应
+type AIModelSimpleResponse struct {
+	ID                      string    `json:"id"`
+	ModelName               string    `json:"model_name"`
+	DisplayName             string    `json:"display_name,omitempty"`
+	MaxTokens               *int      `json:"max_tokens,omitempty"`
+	IsEnabled               bool      `json:"is_enabled"`
+	VerificationStatus      string    `json:"verification_status"`
+	Capabilities            []string  `json:"capabilities"` // ["chat", "embedding", "rerank"]
+	SupportsStream          bool      `json:"supports_stream"`
+	SupportsVision          bool      `json:"supports_vision"`
+	SupportsFunctionCalling bool      `json:"supports_function_calling"`
+	SupportsReasoning       bool      `json:"supports_reasoning"`
+	SupportsWebSearch       bool      `json:"supports_web_search"`
+	EmbeddingDimensions     *int      `json:"embedding_dimensions,omitempty"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
 }

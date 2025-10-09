@@ -26,6 +26,12 @@ type DocumentPO struct {
 	ChunkCount      int64     `gorm:"column:chunk_count;not null;default:0"`
 	TokenCount      int       `gorm:"column:token_count;not null;default:0"`
 	Metadata        string    `gorm:"column:metadata;type:jsonb"`
+
+	// 多模态支持
+	SourceType    string `gorm:"column:source_type;size:20;not null;default:'file'"`
+	SourceURL     string `gorm:"column:source_url;type:text"`
+	SourceContent string `gorm:"column:source_content;type:text"`
+
 	CreatedAt       time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
 	UpdatedAt       time.Time `gorm:"column:updated_at;not null;default:CURRENT_TIMESTAMP"`
 }
@@ -70,6 +76,9 @@ func (r *DocumentRepo) Create(ctx context.Context, doc *biz.Document) error {
 		ChunkCount:      doc.ChunkCount,
 		TokenCount:      doc.TokenCount,
 		Metadata:        metadataJSON,
+		SourceType:      doc.SourceType,
+		SourceURL:       doc.SourceURL,
+		SourceContent:   doc.SourceContent,
 		CreatedAt:       doc.CreatedAt,
 		UpdatedAt:       doc.UpdatedAt,
 	}
@@ -91,6 +100,25 @@ func (r *DocumentRepo) GetByID(ctx context.Context, id string) (*biz.Document, e
 	}
 
 	return r.toDomain(&po), nil
+}
+
+// GetByIDs 批量获取文档
+func (r *DocumentRepo) GetByIDs(ctx context.Context, ids []string) ([]*biz.Document, error) {
+	if len(ids) == 0 {
+		return []*biz.Document{}, nil
+	}
+
+	var pos []DocumentPO
+	err := r.db.WithContext(ctx).GetDB().Where("id IN ?", ids).Find(&pos).Error
+	if err != nil {
+		return nil, fmt.Errorf("failed to get documents: %w", err)
+	}
+
+	docs := make([]*biz.Document, len(pos))
+	for i, po := range pos {
+		docs[i] = r.toDomain(&po)
+	}
+	return docs, nil
 }
 
 // List 列出文档
@@ -148,6 +176,9 @@ func (r *DocumentRepo) Update(ctx context.Context, doc *biz.Document) error {
 		ChunkCount:      doc.ChunkCount,
 		TokenCount:      doc.TokenCount,
 		Metadata:        metadataJSON,
+		SourceType:      doc.SourceType,
+		SourceURL:       doc.SourceURL,
+		SourceContent:   doc.SourceContent,
 		CreatedAt:       doc.CreatedAt, // 保持原始创建时间
 		UpdatedAt:       time.Now(),
 	}
@@ -165,6 +196,20 @@ func (r *DocumentRepo) Delete(ctx context.Context, id string) error {
 	err := r.db.WithContext(ctx).GetDB().Where("id = ?", id).Delete(&DocumentPO{}).Error
 	if err != nil {
 		return fmt.Errorf("failed to delete document: %w", err)
+	}
+
+	return nil
+}
+
+// BatchDelete 批量删除文档
+func (r *DocumentRepo) BatchDelete(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	err := r.db.WithContext(ctx).GetDB().Where("id IN ?", ids).Delete(&DocumentPO{}).Error
+	if err != nil {
+		return fmt.Errorf("failed to batch delete documents: %w", err)
 	}
 
 	return nil
@@ -206,12 +251,14 @@ func (r *DocumentRepo) toDomain(po *DocumentPO) *biz.Document {
 		FileHash:        po.FileHash,
 		MinioBucket:     po.MinioBucket,
 		MinioObjectKey:  po.MinioObjectKey,
-		FilePath:        fmt.Sprintf("%s/%s", po.MinioBucket, po.MinioObjectKey), // 兼容旧代码
 		ProcessStatus:   po.ProcessStatus,
 		ProcessError:    po.ProcessError,
 		ChunkCount:      po.ChunkCount,
 		TokenCount:      po.TokenCount,
 		Metadata:        metadata,
+		SourceType:      po.SourceType,
+		SourceURL:       po.SourceURL,
+		SourceContent:   po.SourceContent,
 		CreatedAt:       po.CreatedAt,
 		UpdatedAt:       po.UpdatedAt,
 	}
@@ -227,6 +274,7 @@ type ChunkPO struct {
 	TokenCount      int       `gorm:"column:token_count;not null"`
 	MilvusID        string    `gorm:"column:milvus_id;size:100;not null;uniqueIndex:idx_chunk_milvus_id"`
 	Metadata        string    `gorm:"column:metadata;type:jsonb"`
+	ContentTSV      string    `gorm:"column:content_tsv;type:tsvector"` // 全文搜索向量（由触发器自动维护）
 	CreatedAt       time.Time `gorm:"column:created_at;not null;default:CURRENT_TIMESTAMP"`
 }
 
@@ -335,6 +383,23 @@ func (r *ChunkRepo) DeleteByDocumentID(ctx context.Context, docID string) error 
 	return nil
 }
 
+// BatchDeleteByDocumentIDs 批量删除文档的分块
+func (r *ChunkRepo) BatchDeleteByDocumentIDs(ctx context.Context, docIDs []string) error {
+	if len(docIDs) == 0 {
+		return nil
+	}
+
+	err := r.db.WithContext(ctx).GetDB().
+		Where("document_id IN ?", docIDs).
+		Delete(&ChunkPO{}).Error
+
+	if err != nil {
+		return fmt.Errorf("failed to batch delete chunks: %w", err)
+	}
+
+	return nil
+}
+
 // DeleteByKnowledgeBaseID 根据知识库 ID 删除分块
 func (r *ChunkRepo) DeleteByKnowledgeBaseID(ctx context.Context, kbID string) error {
 	err := r.db.WithContext(ctx).GetDB().
@@ -346,4 +411,69 @@ func (r *ChunkRepo) DeleteByKnowledgeBaseID(ctx context.Context, kbID string) er
 	}
 
 	return nil
+}
+
+// KeywordSearchResult 关键词搜索结果（带相关度分数）
+type KeywordSearchResult struct {
+	Chunk *biz.Chunk
+	Score float32 // BM25 分数
+}
+
+// KeywordSearch 关键词搜索（使用 PostgreSQL 全文搜索 + BM25 相关度排序）
+func (r *ChunkRepo) KeywordSearch(ctx context.Context, kbID, query string, topK int) ([]*biz.Chunk, error) {
+	if topK <= 0 {
+		topK = 10
+	}
+
+	// 使用 PostgreSQL 全文搜索 + BM25 评分
+	// bm25_score: 自定义 BM25 函数，考虑词频饱和和文档长度归一化
+	// plainto_tsquery: 将查询文本转换为 tsquery（自动处理空格和特殊字符）
+	var results []struct {
+		ChunkPO
+		BM25Score float32 `gorm:"column:bm25_score"`
+	}
+
+	err := r.db.WithContext(ctx).GetDB().
+		Model(&ChunkPO{}).
+		Select(`
+			chunks.*,
+			bm25_score(content_tsv, plainto_tsquery('simple', ?), 1.2, 0.75) as bm25_score
+		`, query).
+		Where("knowledge_base_id = ?", kbID).
+		Where("content_tsv @@ plainto_tsquery('simple', ?)", query).
+		Order("bm25_score DESC").
+		Limit(topK).
+		Find(&results).Error
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to full-text search with BM25: %w", err)
+	}
+
+	chunks := make([]*biz.Chunk, len(results))
+	for i, result := range results {
+		// 反序列化Metadata
+		var metadata map[string]interface{}
+		if result.Metadata != "" && result.Metadata != "{}" {
+			_ = json.Unmarshal([]byte(result.Metadata), &metadata)
+		}
+
+		chunks[i] = &biz.Chunk{
+			ID:              result.ID,
+			DocumentID:      result.DocumentID,
+			KnowledgeBaseID: result.KnowledgeBaseID,
+			Content:         result.Content,
+			Position:        result.ChunkIndex,
+			TokenCount:      result.TokenCount,
+			Metadata:        metadata,
+			CreatedAt:       result.CreatedAt,
+		}
+
+		// 将 BM25 分数存储到 metadata 中（供混合检索使用）
+		if chunks[i].Metadata == nil {
+			chunks[i].Metadata = make(map[string]interface{})
+		}
+		chunks[i].Metadata["bm25_score"] = result.BM25Score
+	}
+
+	return chunks, nil
 }

@@ -3,207 +3,60 @@ package biz
 import (
 	"context"
 	"time"
-
-	"github.com/google/uuid"
 )
 
-// AIProviderConfig AI服务商配置业务对象
-type AIProviderConfig struct {
-	ID                  string
-	OwnerID             string // SystemOwnerID = 官方
-	ProviderType        string // openai, anthropic, siliconflow 等
-	ProviderName        string
-	APIKey              string
-	APIBaseURL          string
-	EmbeddingModel      string
-	EmbeddingDimensions int
-	IsEnabled           bool
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+// AIProvider AI服务商（系统预设，只读）
+type AIProvider struct {
+	ID           string
+	ProviderType string // openai, anthropic, siliconflow 等
+	ProviderName string
+	APIBaseURL   string
+	APIKey       string // API 密钥
+	IsEnabled    bool
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
-// IsOfficial 是否为官方配置
-func (c *AIProviderConfig) IsOfficial() bool {
-	return c.OwnerID == SystemOwnerID
+// AIProviderRepo AI服务商仓储接口
+type AIProviderRepo interface {
+	ListAll(ctx context.Context) ([]*AIProvider, error)
+	GetByID(ctx context.Context, id string) (*AIProvider, error)
+	GetByType(ctx context.Context, providerType string) (*AIProvider, error)
+	UpdateStatus(ctx context.Context, id string, isEnabled bool) error
+	UpdateConfig(ctx context.Context, id string, apiKey, apiBaseURL *string) error
 }
 
-// AIProviderConfigRepo AI服务商配置仓储接口
-type AIProviderConfigRepo interface {
-	Create(ctx context.Context, config *AIProviderConfig) error
-	GetByID(ctx context.Context, id string, userID string) (*AIProviderConfig, error)
-	GetFirstAvailable(ctx context.Context, userID string) (*AIProviderConfig, error)
-	List(ctx context.Context, userID string) ([]*AIProviderConfig, error)
-	Update(ctx context.Context, config *AIProviderConfig) error
-	Delete(ctx context.Context, id string, ownerID string) error
-	CountByKnowledgeBase(ctx context.Context, configID string) (int64, error)
+// AIProviderUseCase AI服务商用例（只读）
+type AIProviderUseCase struct {
+	repo AIProviderRepo
 }
 
-// CreateAIProviderConfigRequest 创建AI服务商配置请求
-type CreateAIProviderConfigRequest struct {
-	ProviderType        string
-	ProviderName        string
-	APIKey              string
-	APIBaseURL          string
-	EmbeddingModel      string
-	EmbeddingDimensions int
+// NewAIProviderUseCase 创建AI服务商用例
+func NewAIProviderUseCase(repo AIProviderRepo) *AIProviderUseCase {
+	return &AIProviderUseCase{repo: repo}
 }
 
-// UpdateAIProviderConfigRequest 更新AI服务商配置请求
-type UpdateAIProviderConfigRequest struct {
-	ProviderName        *string
-	APIKey              *string
-	APIBaseURL          *string
-	EmbeddingModel      *string
-	EmbeddingDimensions *int
+// ListAIProviders 获取所有AI服务商列表
+func (uc *AIProviderUseCase) ListAIProviders(ctx context.Context) ([]*AIProvider, error) {
+	return uc.repo.ListAll(ctx)
 }
 
-// AIProviderConfigUseCase AI服务商配置用例
-type AIProviderConfigUseCase struct {
-	repo AIProviderConfigRepo
+// GetAIProviderByID 根据ID获取AI服务商
+func (uc *AIProviderUseCase) GetAIProviderByID(ctx context.Context, id string) (*AIProvider, error) {
+	return uc.repo.GetByID(ctx, id)
 }
 
-// NewAIProviderConfigUseCase 创建AI服务商配置用例
-func NewAIProviderConfigUseCase(repo AIProviderConfigRepo) *AIProviderConfigUseCase {
-	return &AIProviderConfigUseCase{repo: repo}
+// GetAIProviderByType 根据类型获取AI服务商
+func (uc *AIProviderUseCase) GetAIProviderByType(ctx context.Context, providerType string) (*AIProvider, error) {
+	return uc.repo.GetByType(ctx, providerType)
 }
 
-// CreateAIProviderConfig 创建AI服务商配置
-func (uc *AIProviderConfigUseCase) CreateAIProviderConfig(
-	ctx context.Context,
-	userID string,
-	req *CreateAIProviderConfigRequest,
-) (*AIProviderConfig, error) {
-	// 验证必填字段
-	if req.ProviderType == "" {
-		return nil, ErrAIProviderConfigInvalidProvider
-	}
-	if req.ProviderName == "" {
-		return nil, ErrAIProviderConfigNameRequired
-	}
-	if req.APIKey == "" {
-		return nil, ErrAIProviderConfigAPIKeyRequired
-	}
-	if req.EmbeddingModel == "" || req.EmbeddingDimensions <= 0 {
-		return nil, ErrAIProviderConfigInvalidProvider
-	}
-
-	now := time.Now()
-	config := &AIProviderConfig{
-		ID:                  uuid.New().String(),
-		OwnerID:             userID,
-		ProviderType:        req.ProviderType,
-		ProviderName:        req.ProviderName,
-		APIKey:              req.APIKey,
-		APIBaseURL:          req.APIBaseURL,
-		EmbeddingModel:      req.EmbeddingModel,
-		EmbeddingDimensions: req.EmbeddingDimensions,
-		IsEnabled:           true,
-		CreatedAt:           now,
-		UpdatedAt:           now,
-	}
-
-	if err := uc.repo.Create(ctx, config); err != nil {
-		return nil, err
-	}
-
-	return config, nil
+// UpdateProviderStatus 更新服务商启用状态
+func (uc *AIProviderUseCase) UpdateProviderStatus(ctx context.Context, id string, isEnabled bool) error {
+	return uc.repo.UpdateStatus(ctx, id, isEnabled)
 }
 
-// GetAIProviderConfig 获取AI服务商配置
-func (uc *AIProviderConfigUseCase) GetAIProviderConfig(
-	ctx context.Context,
-	id string,
-	userID string,
-) (*AIProviderConfig, error) {
-	return uc.repo.GetByID(ctx, id, userID)
-}
-
-// ListAIProviderConfigs 获取AI服务商配置列表
-func (uc *AIProviderConfigUseCase) ListAIProviderConfigs(
-	ctx context.Context,
-	userID string,
-) ([]*AIProviderConfig, error) {
-	return uc.repo.List(ctx, userID)
-}
-
-// UpdateAIProviderConfig 更新AI服务商配置
-func (uc *AIProviderConfigUseCase) UpdateAIProviderConfig(
-	ctx context.Context,
-	id string,
-	userID string,
-	req *UpdateAIProviderConfigRequest,
-) (*AIProviderConfig, error) {
-	// 获取配置
-	config, err := uc.repo.GetByID(ctx, id, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	// 权限检查：不能编辑官方配置
-	if config.IsOfficial() {
-		return nil, ErrCannotEditOfficialResource
-	}
-
-	// 权限检查：只能编辑自己的配置
-	if config.OwnerID != userID {
-		return nil, ErrUnauthorized
-	}
-
-	// 更新字段
-	if req.ProviderName != nil {
-		config.ProviderName = *req.ProviderName
-	}
-	if req.APIKey != nil {
-		config.APIKey = *req.APIKey
-	}
-	if req.APIBaseURL != nil {
-		config.APIBaseURL = *req.APIBaseURL
-	}
-	if req.EmbeddingModel != nil {
-		config.EmbeddingModel = *req.EmbeddingModel
-	}
-	if req.EmbeddingDimensions != nil {
-		config.EmbeddingDimensions = *req.EmbeddingDimensions
-	}
-	config.UpdatedAt = time.Now()
-
-	if err := uc.repo.Update(ctx, config); err != nil {
-		return nil, err
-	}
-
-	return config, nil
-}
-
-// DeleteAIProviderConfig 删除AI服务商配置
-func (uc *AIProviderConfigUseCase) DeleteAIProviderConfig(
-	ctx context.Context,
-	id string,
-	userID string,
-) error {
-	// 获取配置
-	config, err := uc.repo.GetByID(ctx, id, userID)
-	if err != nil {
-		return err
-	}
-
-	// 权限检查：不能删除官方配置
-	if config.IsOfficial() {
-		return ErrCannotDeleteOfficialResource
-	}
-
-	// 权限检查：只能删除自己的配置
-	if config.OwnerID != userID {
-		return ErrUnauthorized
-	}
-
-	// 检查是否有知识库在使用
-	count, err := uc.repo.CountByKnowledgeBase(ctx, id)
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		return ErrAIProviderConfigInUse
-	}
-
-	return uc.repo.Delete(ctx, id, userID)
+// UpdateProviderConfig 更新服务商配置（API Key 和 API 地址）
+func (uc *AIProviderUseCase) UpdateProviderConfig(ctx context.Context, id string, apiKey, apiBaseURL *string) error {
+	return uc.repo.UpdateConfig(ctx, id, apiKey, apiBaseURL)
 }

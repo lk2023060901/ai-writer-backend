@@ -24,6 +24,7 @@ type TopicRepo interface {
 	Create(ctx context.Context, topic *types.Topic) error
 	GetByID(ctx context.Context, id string) (*types.Topic, error)
 	ListByAssistant(ctx context.Context, assistantID string) ([]*types.Topic, error)
+	ListByUserID(ctx context.Context, userID string) ([]*types.Topic, error)
 	Update(ctx context.Context, topic *types.Topic) error
 	Delete(ctx context.Context, id string) error
 	DeleteByAssistant(ctx context.Context, assistantID string) error

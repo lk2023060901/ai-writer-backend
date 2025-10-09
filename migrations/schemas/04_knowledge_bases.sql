@@ -10,8 +10,8 @@ CREATE TABLE knowledge_bases (
     -- 基本信息
     name VARCHAR(255) NOT NULL,
 
-    -- 关联的 AI 服务商配置
-    ai_provider_config_id UUID NOT NULL,
+    -- 关联的 AI 服务商类型（直接存储 provider_type）
+    ai_provider_type VARCHAR(50) NOT NULL,
 
     -- Chunking 配置
     chunk_size INTEGER NOT NULL DEFAULT 512,
@@ -31,15 +31,13 @@ CREATE TABLE knowledge_bases (
 
     -- 约束
     CONSTRAINT fk_kb_owner FOREIGN KEY (owner_id)
-        REFERENCES users(id) ON DELETE CASCADE,
-    CONSTRAINT fk_kb_ai_provider FOREIGN KEY (ai_provider_config_id)
-        REFERENCES ai_provider_configs(id) ON DELETE RESTRICT
+        REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- 索引
 CREATE INDEX idx_kb_owner ON knowledge_bases(owner_id);
 CREATE INDEX idx_kb_name ON knowledge_bases(name);
-CREATE INDEX idx_kb_ai_provider ON knowledge_bases(ai_provider_config_id);
+CREATE INDEX idx_kb_provider_type ON knowledge_bases(ai_provider_type);
 CREATE INDEX idx_kb_deleted ON knowledge_bases(deleted_at);
 CREATE INDEX idx_kb_owner_created ON knowledge_bases(owner_id, created_at DESC)
     WHERE deleted_at IS NULL;

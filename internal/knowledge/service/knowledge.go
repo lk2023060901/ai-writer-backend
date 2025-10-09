@@ -13,21 +13,21 @@ import (
 
 // KnowledgeBaseService 知识库 HTTP 服务
 type KnowledgeBaseService struct {
-	kbUseCase       *biz.KnowledgeBaseUseCase
-	aiConfigUseCase *biz.AIProviderConfigUseCase
-	logger          *logger.Logger
+	kbUseCase         *biz.KnowledgeBaseUseCase
+	aiProviderUseCase *biz.AIProviderUseCase
+	logger            *logger.Logger
 }
 
 // NewKnowledgeBaseService 创建知识库服务
 func NewKnowledgeBaseService(
 	kbUseCase *biz.KnowledgeBaseUseCase,
-	aiConfigUseCase *biz.AIProviderConfigUseCase,
+	aiProviderUseCase *biz.AIProviderUseCase,
 	logger *logger.Logger,
 ) *KnowledgeBaseService {
 	return &KnowledgeBaseService{
-		kbUseCase:       kbUseCase,
-		aiConfigUseCase: aiConfigUseCase,
-		logger:          logger,
+		kbUseCase:         kbUseCase,
+		aiProviderUseCase: aiProviderUseCase,
+		logger:            logger,
 	}
 }
 
@@ -46,11 +46,15 @@ func (s *KnowledgeBaseService) CreateKnowledgeBase(c *gin.Context) {
 	}
 
 	kb, err := s.kbUseCase.CreateKnowledgeBase(c.Request.Context(), userID, &biz.CreateKnowledgeBaseRequest{
-		Name:               req.Name,
-		AIProviderConfigID: req.AIProviderConfigID,
-		ChunkSize:          req.ChunkSize,
-		ChunkOverlap:       req.ChunkOverlap,
-		ChunkStrategy:      req.ChunkStrategy,
+		Name:             req.Name,
+		EmbeddingModelID: req.EmbeddingModelID,
+		RerankModelID:    req.RerankModelID,
+		ChunkSize:        req.ChunkSize,
+		ChunkOverlap:     req.ChunkOverlap,
+		ChunkStrategy:    req.ChunkStrategy,
+		Threshold:        req.Threshold,
+		TopK:             req.TopK,
+		EnableHybridSearch: req.EnableHybridSearch,
 	})
 
 	if err != nil {
@@ -58,10 +62,7 @@ func (s *KnowledgeBaseService) CreateKnowledgeBase(c *gin.Context) {
 		return
 	}
 
-	// 获取 AI 配置详情
-	aiConfig, _ := s.aiConfigUseCase.GetAIProviderConfig(c.Request.Context(), kb.AIProviderConfigID, userID)
-
-	response.Created(c, toKnowledgeBaseResponse(kb, aiConfig, userID))
+	response.Created(c, toKnowledgeBaseResponse(kb, userID))
 }
 
 // ListKnowledgeBases 获取知识库列表
@@ -101,9 +102,7 @@ func (s *KnowledgeBaseService) ListKnowledgeBases(c *gin.Context) {
 
 	items := make([]*KnowledgeBaseResponse, len(kbs))
 	for i, kb := range kbs {
-		// 获取每个知识库的 AI 配置
-		aiConfig, _ := s.aiConfigUseCase.GetAIProviderConfig(c.Request.Context(), kb.AIProviderConfigID, userID)
-		items[i] = toKnowledgeBaseResponse(kb, aiConfig, userID)
+		items[i] = toKnowledgeBaseResponse(kb, userID)
 	}
 
 	totalPage := int(math.Ceil(float64(total) / float64(req.PageSize)))
@@ -136,10 +135,7 @@ func (s *KnowledgeBaseService) GetKnowledgeBase(c *gin.Context) {
 		return
 	}
 
-	// 获取 AI 配置详情
-	aiConfig, _ := s.aiConfigUseCase.GetAIProviderConfig(c.Request.Context(), kb.AIProviderConfigID, userID)
-
-	response.Success(c, toKnowledgeBaseResponse(kb, aiConfig, userID))
+	response.Success(c, toKnowledgeBaseResponse(kb, userID))
 }
 
 // UpdateKnowledgeBase 更新知识库
@@ -158,7 +154,10 @@ func (s *KnowledgeBaseService) UpdateKnowledgeBase(c *gin.Context) {
 	}
 
 	kb, err := s.kbUseCase.UpdateKnowledgeBase(c.Request.Context(), id, userID, &biz.UpdateKnowledgeBaseRequest{
-		Name: req.Name,
+		Name:               req.Name,
+		Threshold:          req.Threshold,
+		TopK:               req.TopK,
+		EnableHybridSearch: req.EnableHybridSearch,
 	})
 
 	if err != nil {
@@ -166,10 +165,7 @@ func (s *KnowledgeBaseService) UpdateKnowledgeBase(c *gin.Context) {
 		return
 	}
 
-	// 获取 AI 配置详情
-	aiConfig, _ := s.aiConfigUseCase.GetAIProviderConfig(c.Request.Context(), kb.AIProviderConfigID, userID)
-
-	response.Success(c, toKnowledgeBaseResponse(kb, aiConfig, userID))
+	response.Success(c, toKnowledgeBaseResponse(kb, userID))
 }
 
 // DeleteKnowledgeBase 删除知识库
@@ -206,8 +202,7 @@ func (s *KnowledgeBaseService) handleError(c *gin.Context, err error) {
 	case errors.Is(err, biz.ErrCannotEditOfficialResource),
 		errors.Is(err, biz.ErrCannotDeleteOfficialResource):
 		response.Forbidden(c, err.Error())
-	case errors.Is(err, biz.ErrAIProviderConfigNotFound),
-		errors.Is(err, biz.ErrNoDefaultAIConfig):
+	case errors.Is(err, biz.ErrAIProviderNotFound):
 		response.BadRequest(c, err.Error())
 	default:
 		response.InternalError(c, "internal server error")
@@ -215,7 +210,7 @@ func (s *KnowledgeBaseService) handleError(c *gin.Context, err error) {
 }
 
 // toKnowledgeBaseResponse 转换为响应对象
-func toKnowledgeBaseResponse(kb *biz.KnowledgeBase, aiConfig *biz.AIProviderConfig, currentUserID string) *KnowledgeBaseResponse {
+func toKnowledgeBaseResponse(kb *biz.KnowledgeBase, currentUserID string) *KnowledgeBaseResponse {
 	// 官方知识库：仅返回 ID 和名称
 	if kb.IsOfficial() {
 		return &KnowledgeBaseResponse{
@@ -227,11 +222,6 @@ func toKnowledgeBaseResponse(kb *biz.KnowledgeBase, aiConfig *biz.AIProviderConf
 	}
 
 	// 用户知识库：返回完整信息
-	var aiConfigResp *AIProviderConfigResponse
-	if aiConfig != nil {
-		aiConfigResp = toAIProviderConfigResponse(aiConfig, currentUserID)
-	}
-
 	createdAt := kb.CreatedAt.Format("2006-01-02T15:04:05Z07:00")
 	updatedAt := kb.UpdatedAt.Format("2006-01-02T15:04:05Z07:00")
 
@@ -241,11 +231,15 @@ func toKnowledgeBaseResponse(kb *biz.KnowledgeBase, aiConfig *biz.AIProviderConf
 		IsOfficial:       false,
 		DocumentCount:    kb.DocumentCount,
 		OwnerID:          &kb.OwnerID,
-		AIProviderConfig: aiConfigResp,
+		EmbeddingModelID: &kb.EmbeddingModelID,
+		RerankModelID:    kb.RerankModelID,
 		ChunkSize:        &kb.ChunkSize,
 		ChunkOverlap:     &kb.ChunkOverlap,
 		ChunkStrategy:    &kb.ChunkStrategy,
 		MilvusCollection: &kb.MilvusCollection,
+		Threshold:        &kb.Threshold,
+		TopK:             &kb.TopK,
+		EnableHybridSearch: &kb.EnableHybridSearch,
 		CreatedAt:        &createdAt,
 		UpdatedAt:        &updatedAt,
 	}

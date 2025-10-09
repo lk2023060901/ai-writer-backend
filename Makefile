@@ -1,6 +1,13 @@
-.PHONY: run build test test-unit test-integration deps docker-up docker-down docker-logs clean migrate-status migrate-up migrate-down migrate-reset migrate-create
+.PHONY: run dev build test test-unit test-integration deps docker-up docker-down docker-logs clean migrate-status migrate-up migrate-down migrate-reset migrate-create
 
+# 开发模式 - 使用优雅退出脚本（推荐）
+dev:
+	@./scripts/dev.sh config.yaml
+
+# 直接运行 - 使用 trap 捕获信号
 run:
+	@echo "Starting server... (Press Ctrl+C to stop)"
+	@trap 'echo "Shutting down..."; pkill -P $$; exit' INT TERM; \
 	go run cmd/server/main.go -config=config.yaml
 
 build:

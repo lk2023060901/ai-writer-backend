@@ -3,22 +3,39 @@ package service
 import (
 	"net/http"
 	"strings"
-
-	"github.com/lk2023060901/ai-writer-backend/internal/assistant/biz"
-	"github.com/lk2023060901/ai-writer-backend/internal/assistant/types"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/lk2023060901/ai-writer-backend/internal/assistant/biz"
+	"github.com/lk2023060901/ai-writer-backend/internal/assistant/llm"
+	"github.com/lk2023060901/ai-writer-backend/internal/assistant/types"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/sse"
 )
 
 // AssistantService handles HTTP requests for assistant operations
 type AssistantService struct {
-	useCase *biz.AssistantUseCase
+	useCase        *biz.AssistantUseCase
+	topicUseCase   *biz.TopicUseCase
+	messageUseCase *biz.MessageUseCase
+	sseHub         *sse.Hub
+	orchestrator   llm.MultiProviderOrchestrator
 }
 
 // NewAssistantService creates a new assistant service
-func NewAssistantService(useCase *biz.AssistantUseCase) *AssistantService {
+func NewAssistantService(
+	useCase *biz.AssistantUseCase,
+	topicUseCase *biz.TopicUseCase,
+	messageUseCase *biz.MessageUseCase,
+	sseHub *sse.Hub,
+	orchestrator llm.MultiProviderOrchestrator,
+) *AssistantService {
 	return &AssistantService{
-		useCase: useCase,
+		useCase:        useCase,
+		topicUseCase:   topicUseCase,
+		messageUseCase: messageUseCase,
+		sseHub:         sseHub,
+		orchestrator:   orchestrator,
 	}
 }
 
@@ -177,4 +194,70 @@ func (s *AssistantService) DeleteAssistant(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Assistant deleted successfully"})
+}
+
+// ChatStream SSE 流式聊天接口
+func (s *AssistantService) ChatStream(c *gin.Context) {
+	var req struct {
+		Message      string `json:"message" binding:"required"`
+		AssistantID  string `json:"assistant_id"`
+		KnowledgeBaseID string `json:"knowledge_base_id"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	userID := c.GetString("user_id")
+	if userID == "" {
+		userID = "default-user"
+	}
+
+	// 创建 SSE 客户端
+	sessionID := uuid.New().String()
+	client := &sse.Client{
+		ID:       sessionID,
+		Channel:  make(chan sse.Event, 100),
+		Resource: "chat:" + sessionID,
+	}
+
+	// 在 goroutine 中调用 AI 生成响应
+	go func() {
+		defer close(client.Channel)
+
+		// TODO: 实现 AI 流式响应逻辑
+		// 这里需要调用 LLM API 获取流式响应,并逐个 token 发送
+
+		// 示例: 模拟流式响应
+		response := "这是一个示例回答。AI 流式响应需要集成 LLM API。"
+		words := strings.Fields(response)
+
+		for i, word := range words {
+			select {
+			case <-c.Request.Context().Done():
+				return
+			default:
+				client.Channel <- sse.Event{
+					Type: "token",
+					Data: map[string]interface{}{
+						"content": word + " ",
+						"index":   i,
+					},
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+
+		// 发送完成事件
+		client.Channel <- sse.Event{
+			Type: "done",
+			Data: map[string]interface{}{
+				"message": "Response completed",
+			},
+		}
+	}()
+
+	// 开始 SSE 流式传输
+	sse.StreamResponse(c, client, s.sseHub, 30*time.Second)
 }

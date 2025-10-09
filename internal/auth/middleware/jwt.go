@@ -14,20 +14,26 @@ func JWTAuth(jwtSecret string, log *logger.Logger) gin.HandlerFunc {
 	jwtManager := auth.NewJWTManager(jwtSecret)
 
 	return func(c *gin.Context) {
-		// 从 Authorization header 获取 token
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization header"})
-			c.Abort()
-			return
-		}
+		var token string
+		var err error
 
-		// 提取 token
-		token, err := auth.ExtractTokenFromHeader(authHeader)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization header format"})
-			c.Abort()
-			return
+		// 优先从 Authorization header 获取 token
+		authHeader := c.GetHeader("Authorization")
+		if authHeader != "" {
+			token, err = auth.ExtractTokenFromHeader(authHeader)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid authorization header format"})
+				c.Abort()
+				return
+			}
+		} else {
+			// 如果 header 没有,尝试从查询参数获取 (用于 SSE)
+			token = c.Query("token")
+			if token == "" {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization"})
+				c.Abort()
+				return
+			}
 		}
 
 		// 验证 token

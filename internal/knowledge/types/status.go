@@ -37,12 +37,13 @@ const (
 	FileTypeDocx FileType = "docx"
 	FileTypeMd   FileType = "md"
 	FileTypeHtml FileType = "html"
+	FileTypeJson FileType = "json"
 )
 
 // Valid 检查文件类型是否有效
 func (ft FileType) Valid() bool {
 	switch ft {
-	case FileTypeTxt, FileTypePdf, FileTypeDocx, FileTypeMd, FileTypeHtml:
+	case FileTypeTxt, FileTypePdf, FileTypeDocx, FileTypeMd, FileTypeHtml, FileTypeJson:
 		return true
 	}
 	return false

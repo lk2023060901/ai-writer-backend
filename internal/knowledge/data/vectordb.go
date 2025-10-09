@@ -135,6 +135,11 @@ func (s *MilvusVectorDBService) InsertVectors(ctx context.Context, collectionNam
 
 // Search 向量搜索
 func (s *MilvusVectorDBService) Search(ctx context.Context, collectionName string, vector []float32, topK int) ([]*biz.SearchResult, error) {
+	return s.SearchWithThreshold(ctx, collectionName, vector, topK, 0.0)
+}
+
+// SearchWithThreshold 向量搜索（带阈值过滤）
+func (s *MilvusVectorDBService) SearchWithThreshold(ctx context.Context, collectionName string, vector []float32, topK int, minScore float32) ([]*biz.SearchResult, error) {
 	cli := s.client.GetClient()
 	if cli == nil {
 		return nil, fmt.Errorf("milvus client is not available")
@@ -151,7 +156,7 @@ func (s *MilvusVectorDBService) Search(ctx context.Context, collectionName strin
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
 
-	// 解析结果
+	// 解析结果并应用阈值过滤
 	var results []*biz.SearchResult
 	for _, resultSet := range searchResult {
 		docIDs := resultSet.GetColumn("document_id")
@@ -159,6 +164,13 @@ func (s *MilvusVectorDBService) Search(ctx context.Context, collectionName strin
 		contents := resultSet.GetColumn("content")
 
 		for i := 0; i < resultSet.ResultCount; i++ {
+			score := resultSet.Scores[i]
+
+			// 应用最小分数过滤（COSINE 相似度：0-1，越高越相似）
+			if minScore > 0 && score < minScore {
+				continue
+			}
+
 			documentID, _ := docIDs.GetAsString(i)
 			chunkID, _ := chunkIDs.GetAsString(i)
 			content, _ := contents.GetAsString(i)
@@ -167,7 +179,7 @@ func (s *MilvusVectorDBService) Search(ctx context.Context, collectionName strin
 				ChunkID:    chunkID,
 				DocumentID: documentID,
 				Content:    content,
-				Score:      resultSet.Scores[i],
+				Score:      score,
 			})
 		}
 	}

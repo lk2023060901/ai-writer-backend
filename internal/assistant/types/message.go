@@ -9,6 +9,8 @@ type Message struct {
 	Role          string         `json:"role"` // user | assistant
 	ContentBlocks []ContentBlock `json:"content_blocks"`
 	TokenCount    *int           `json:"token_count,omitempty"`
+	Provider      string         `json:"provider,omitempty"`      // AI provider (e.g., anthropic, openai)
+	Model         string         `json:"model,omitempty"`         // AI model (e.g., claude-sonnet-4-5)
 	CreatedAt     time.Time      `json:"created_at"`
 }
 

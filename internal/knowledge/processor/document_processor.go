@@ -1,16 +1,23 @@
 package processor
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
-	"encoding/xml"
 	"fmt"
-	"io"
 	"strings"
 
-	"github.com/ledongthuc/pdf"
+	"github.com/gen2brain/go-fitz"
+	"github.com/tidwall/gjson"
+	"github.com/yuin/goldmark"
+	goldmarktext "github.com/yuin/goldmark/text"
 )
+
+// func init() {
+// 	// 设置 UniOffice 许可证密钥（已禁用）
+// 	err := license.SetMeteredKey("c1609bf36881094add1da9ca73148904a289319d80e190b55c99687c84143e1c")
+// 	if err != nil {
+// 		panic(fmt.Sprintf("failed to set unioffice license: %v", err))
+// 	}
+// }
 
 // DocumentProcessor 文档处理器实现
 type DocumentProcessor struct{}
@@ -25,34 +32,37 @@ func (p *DocumentProcessor) ExtractText(ctx context.Context, fileData []byte, fi
 	switch strings.ToLower(fileType) {
 	case "pdf":
 		return p.extractPDF(fileData)
-	case "docx":
-		return p.extractDOCX(fileData)
-	case "txt", "md":
+	// case "docx":
+	// 	return p.extractDOCX(fileData)
+	case "txt":
 		return string(fileData), nil
+	case "md":
+		return p.extractMarkdown(fileData)
+	case "json":
+		return p.extractJSON(fileData)
 	default:
 		return "", fmt.Errorf("unsupported file type: %s", fileType)
 	}
 }
 
-// extractPDF 提取 PDF 文本
+// extractPDF 提取 PDF 文本（使用 go-fitz/MuPDF）
 func (p *DocumentProcessor) extractPDF(fileData []byte) (string, error) {
-	reader, err := pdf.NewReader(bytes.NewReader(fileData), int64(len(fileData)))
+	// 从内存打开 PDF 文档
+	doc, err := fitz.NewFromMemory(fileData)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse PDF: %w", err)
+		return "", fmt.Errorf("failed to open PDF: %w", err)
 	}
+	defer doc.Close()
 
 	var textBuilder strings.Builder
-	numPages := reader.NumPage()
+	numPages := doc.NumPage()
 
-	for i := 1; i <= numPages; i++ {
-		page := reader.Page(i)
-		if page.V.IsNull() {
-			continue
-		}
-
-		text, err := page.GetPlainText(nil)
+	// 提取每一页的文本
+	for i := 0; i < numPages; i++ {
+		text, err := doc.Text(i)
 		if err != nil {
-			continue // 跳过无法提取的页面
+			// 跳过无法提取的页面
+			continue
 		}
 
 		textBuilder.WriteString(text)
@@ -62,83 +72,108 @@ func (p *DocumentProcessor) extractPDF(fileData []byte) (string, error) {
 	return textBuilder.String(), nil
 }
 
-// extractDOCX 提取 DOCX 文本（使用原生 zip + xml 解析，无需第三方库）
-func (p *DocumentProcessor) extractDOCX(fileData []byte) (string, error) {
-	// DOCX 是一个 ZIP 文件
-	zipReader, err := zip.NewReader(bytes.NewReader(fileData), int64(len(fileData)))
-	if err != nil {
-		return "", fmt.Errorf("failed to open DOCX as ZIP: %w", err)
-	}
+// extractDOCX 提取 DOCX 文本（已禁用 UniOffice，仅支持 MinerU）
+// func (p *DocumentProcessor) extractDOCX(fileData []byte) (string, error) {
+// 	// 打开 DOCX 文档
+// 	doc, err := document.Read(bytes.NewReader(fileData), int64(len(fileData)))
+// 	if err != nil {
+// 		return "", fmt.Errorf("failed to open DOCX document: %w", err)
+// 	}
+// 	defer doc.Close()
+//
+// 	// 提取所有段落的文本
+// 	var textBuilder strings.Builder
+// 	for _, para := range doc.Paragraphs() {
+// 		for _, run := range para.Runs() {
+// 			textBuilder.WriteString(run.Text())
+// 		}
+// 		textBuilder.WriteString("\n")
+// 	}
+//
+// 	// 提取表格内容
+// 	for _, table := range doc.Tables() {
+// 		for _, row := range table.Rows() {
+// 			for _, cell := range row.Cells() {
+// 				for _, para := range cell.Paragraphs() {
+// 					for _, run := range para.Runs() {
+// 						textBuilder.WriteString(run.Text())
+// 					}
+// 					textBuilder.WriteString("\t")
+// 				}
+// 			}
+// 			textBuilder.WriteString("\n")
+// 		}
+// 		textBuilder.WriteString("\n")
+// 	}
+//
+// 	return textBuilder.String(), nil
+// }
 
-	// 找到 word/document.xml 文件
-	var documentXML *zip.File
-	for _, file := range zipReader.File {
-		if file.Name == "word/document.xml" {
-			documentXML = file
-			break
-		}
-	}
+// extractMarkdown 提取 Markdown 文本（使用 goldmark 解析）
+func (p *DocumentProcessor) extractMarkdown(fileData []byte) (string, error) {
+	// Goldmark 用于解析和验证 Markdown
+	md := goldmark.New()
+	reader := goldmarktext.NewReader(fileData)
+	_ = md.Parser().Parse(reader) // 验证格式
 
-	if documentXML == nil {
-		return "", fmt.Errorf("document.xml not found in DOCX")
-	}
-
-	// 读取 document.xml 内容
-	xmlFile, err := documentXML.Open()
-	if err != nil {
-		return "", fmt.Errorf("failed to open document.xml: %w", err)
-	}
-	defer xmlFile.Close()
-
-	xmlData, err := io.ReadAll(xmlFile)
-	if err != nil {
-		return "", fmt.Errorf("failed to read document.xml: %w", err)
-	}
-
-	// 解析 XML 提取文本
-	text, err := p.extractTextFromDocumentXML(xmlData)
-	if err != nil {
-		return "", fmt.Errorf("failed to extract text from XML: %w", err)
-	}
-
-	return text, nil
+	// 直接返回原始 Markdown 内容（保留格式更有助于 RAG 理解上下文）
+	return string(fileData), nil
 }
 
-// extractTextFromDocumentXML 从 document.xml 中提取纯文本
-func (p *DocumentProcessor) extractTextFromDocumentXML(xmlData []byte) (string, error) {
-	type Text struct {
-		Value string `xml:",chardata"`
+// extractJSON 提取 JSON 内容（使用 gjson 美化）
+func (p *DocumentProcessor) extractJSON(fileData []byte) (string, error) {
+	// 验证 JSON 格式
+	if !gjson.ValidBytes(fileData) {
+		return "", fmt.Errorf("invalid JSON format")
 	}
 
-	type Run struct {
-		Texts []Text `xml:"t"`
-	}
+	// 解析 JSON 并格式化
+	result := gjson.ParseBytes(fileData)
 
-	type Paragraph struct {
-		Runs []Run `xml:"r"`
-	}
-
-	type Body struct {
-		Paragraphs []Paragraph `xml:"p"`
-	}
-
-	type Document struct {
-		Body Body `xml:"body"`
-	}
-
-	var doc Document
-	if err := xml.Unmarshal(xmlData, &doc); err != nil {
-		return "", fmt.Errorf("failed to unmarshal XML: %w", err)
-	}
-
+	// 将 JSON 转换为可读文本
 	var textBuilder strings.Builder
-	for _, para := range doc.Body.Paragraphs {
-		for _, run := range para.Runs {
-			for _, text := range run.Texts {
-				textBuilder.WriteString(text.Value)
+	var extractValues func(key string, value gjson.Result, depth int)
+	extractValues = func(key string, value gjson.Result, depth int) {
+		indent := strings.Repeat("  ", depth)
+
+		switch value.Type {
+		case gjson.String:
+			textBuilder.WriteString(fmt.Sprintf("%s%s: %s\n", indent, key, value.String()))
+		case gjson.Number:
+			textBuilder.WriteString(fmt.Sprintf("%s%s: %v\n", indent, key, value.Num))
+		case gjson.True, gjson.False:
+			textBuilder.WriteString(fmt.Sprintf("%s%s: %v\n", indent, key, value.Bool()))
+		case gjson.JSON:
+			if value.IsArray() {
+				textBuilder.WriteString(fmt.Sprintf("%s%s: [\n", indent, key))
+				for i, item := range value.Array() {
+					extractValues(fmt.Sprintf("[%d]", i), item, depth+1)
+				}
+				textBuilder.WriteString(fmt.Sprintf("%s]\n", indent))
+			} else if value.IsObject() {
+				textBuilder.WriteString(fmt.Sprintf("%s%s: {\n", indent, key))
+				value.ForEach(func(k, v gjson.Result) bool {
+					extractValues(k.String(), v, depth+1)
+					return true
+				})
+				textBuilder.WriteString(fmt.Sprintf("%s}\n", indent))
 			}
 		}
-		textBuilder.WriteString("\n")
+	}
+
+	// 处理顶层
+	if result.IsArray() {
+		for i, item := range result.Array() {
+			extractValues(fmt.Sprintf("Item %d", i), item, 0)
+		}
+	} else if result.IsObject() {
+		result.ForEach(func(key, value gjson.Result) bool {
+			extractValues(key.String(), value, 0)
+			return true
+		})
+	} else {
+		// 简单值，直接返回
+		return result.String(), nil
 	}
 
 	return textBuilder.String(), nil

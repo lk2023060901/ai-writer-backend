@@ -8,8 +8,17 @@ import (
 	"strings"
 
 	kbtypes "github.com/lk2023060901/ai-writer-backend/internal/knowledge/types"
+	"github.com/unidoc/unioffice/common/license"
 	"github.com/unidoc/unioffice/document"
 )
+
+func init() {
+	// 设置 UniOffice 许可证密钥
+	err := license.SetMeteredKey("c1609bf36881094add1da9ca73148904a289319d80e190b55c99687c84143e1c")
+	if err != nil {
+		panic(fmt.Sprintf("failed to set unioffice license: %v", err))
+	}
+}
 
 // DOCXLoader Word 文档加载器
 type DOCXLoader struct{}

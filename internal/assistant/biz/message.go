@@ -35,6 +35,11 @@ func NewMessageUseCase(repo MessageRepo, topicRepo TopicRepo) *MessageUseCase {
 
 // CreateMessage creates a new message
 func (uc *MessageUseCase) CreateMessage(ctx context.Context, topicID, role string, contentBlocks []types.ContentBlock, tokenCount *int) (*types.Message, error) {
+	return uc.CreateMessageWithModel(ctx, topicID, role, contentBlocks, tokenCount, "", "")
+}
+
+// CreateMessageWithModel creates a new message with provider and model information
+func (uc *MessageUseCase) CreateMessageWithModel(ctx context.Context, topicID, role string, contentBlocks []types.ContentBlock, tokenCount *int, provider, model string) (*types.Message, error) {
 	// Validate topic exists
 	if _, err := uc.topicRepo.GetByID(ctx, topicID); err != nil {
 		return nil, fmt.Errorf("topic not found: %w", err)
@@ -56,6 +61,8 @@ func (uc *MessageUseCase) CreateMessage(ctx context.Context, topicID, role strin
 		Role:          role,
 		ContentBlocks: contentBlocks,
 		TokenCount:    tokenCount,
+		Provider:      provider,
+		Model:         model,
 		CreatedAt:     time.Now(),
 	}
 

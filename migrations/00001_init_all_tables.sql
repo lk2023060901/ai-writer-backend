@@ -173,59 +173,62 @@ COMMENT ON COLUMN official_agents.is_enabled IS '是否启用，禁用的官方�
 -- 3. AI 服务商配置模块
 -- ============================================================================
 
-CREATE TABLE ai_provider_configs (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-
-    -- 所有者 ID（'00000000-0000-0000-0000-000000000000' = 官方配置）
-    owner_id UUID NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
-
-    -- 服务商信息
-    provider_type VARCHAR(50) NOT NULL,
+-- AI 服务商表（系统预设）
+CREATE TABLE ai_providers (
+    id SERIAL PRIMARY KEY,
+    provider_type VARCHAR(50) NOT NULL UNIQUE,
     provider_name VARCHAR(100) NOT NULL,
-
-    -- 认证配置（测试阶段明文存储）
-    api_key TEXT NOT NULL,
     api_base_url VARCHAR(255),
-
-    -- Embedding 模型配置
-    embedding_model VARCHAR(100) NOT NULL,
-    embedding_dimensions INTEGER NOT NULL,
-
-    -- 能力标识（预留）
-    supports_chat BOOLEAN DEFAULT false,
-    supports_embedding BOOLEAN DEFAULT true,
-    supports_rerank BOOLEAN DEFAULT false,
-
-    -- 配额管理（用户配置用）
-    monthly_quota BIGINT,
-    used_tokens BIGINT DEFAULT 0,
-    quota_reset_at TIMESTAMPTZ,
-
-    -- 状态
+    api_key TEXT,
     is_enabled BOOLEAN DEFAULT true,
-
-    -- 时间戳
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    deleted_at TIMESTAMPTZ,
-
-    -- 外键约束
-    CONSTRAINT fk_provider_owner FOREIGN KEY (owner_id)
-        REFERENCES users(id) ON DELETE CASCADE
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 索引
-CREATE INDEX idx_provider_owner ON ai_provider_configs(owner_id);
-CREATE INDEX idx_provider_type ON ai_provider_configs(provider_type);
-CREATE INDEX idx_provider_enabled ON ai_provider_configs(is_enabled);
-CREATE INDEX idx_provider_deleted ON ai_provider_configs(deleted_at);
+COMMENT ON TABLE ai_providers IS 'AI 服务商配置表（系统预设，不可由用户自定义）';
 
--- 注释
-COMMENT ON TABLE ai_provider_configs IS 'AI 服务商配置表：支持多种 AI 服务商（OpenAI、Claude、本地模型等）';
-COMMENT ON COLUMN ai_provider_configs.owner_id IS '所有者 ID，00000000-0000-0000-0000-000000000000 表示官方配置';
-COMMENT ON COLUMN ai_provider_configs.provider_type IS '服务商类型：openai、anthropic、local 等';
-COMMENT ON COLUMN ai_provider_configs.api_key IS 'API 密钥，测试阶段明文存储（TODO: 生产环境需加密）';
-COMMENT ON COLUMN ai_provider_configs.embedding_dimensions IS 'Embedding 向量维度，用于创建 Milvus collection';
+INSERT INTO ai_providers (provider_type, provider_name, api_base_url, api_key, is_enabled) VALUES
+('siliconflow', '硅基流动', 'https://api.siliconflow.cn', 'sk-gkqnwrnkmxqdeuqcpnntuzjtsfmbloyemaolyaxpuicfczxo', true),
+('openai', 'OpenAI', 'https://api.openai.com', NULL, true),
+('anthropic', 'Anthropic', 'https://api.anthropic.com', 'sk-2QMrtTUhFf3HmxrFkHfIXnqBuGTxXVlDT4eVxxTbX02B0fl5', true),
+('gemini', 'Google Gemini', 'https://generativelanguage.googleapis.com', 'AIzaSyASzFYygdDl3nXWUJ_SQxHY-XI8Pz1Ib7E', true);
+
+-- AI 模型表
+CREATE TABLE ai_models (
+    id SERIAL PRIMARY KEY,
+    provider_id INT NOT NULL REFERENCES ai_providers(id) ON DELETE CASCADE,
+    model_types JSONB NOT NULL,
+    model_name VARCHAR(255) NOT NULL,
+    display_name VARCHAR(255),
+    embedding_dimensions INT,
+    max_tokens INT,
+    is_enabled BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(provider_id, model_name)
+);
+
+CREATE INDEX idx_ai_models_provider ON ai_models(provider_id);
+CREATE INDEX idx_ai_models_types ON ai_models USING GIN(model_types);
+
+COMMENT ON TABLE ai_models IS 'AI 模型配置表';
+COMMENT ON COLUMN ai_models.model_types IS '模型支持的类型：["chat"], ["embedding"], ["rerank"] 或组合';
+COMMENT ON COLUMN ai_models.embedding_dimensions IS 'Embedding 默认维度（可通过 API 动态获取）';
+
+INSERT INTO ai_models (provider_id, model_types, model_name, display_name, embedding_dimensions, max_tokens) VALUES
+(1, '["embedding"]', 'BAAI/bge-large-zh-v1.5', 'BGE Large 中文 v1.5', 1024, NULL),
+(1, '["embedding"]', 'BAAI/bge-m3', 'BGE M3 多语言', 1024, NULL),
+(1, '["chat"]', 'Qwen/Qwen2.5-7B-Instruct', 'Qwen 2.5 7B', NULL, 32768),
+(1, '["rerank"]', 'BAAI/bge-reranker-v2-m3', 'BGE Reranker v2 M3', NULL, NULL),
+(2, '["embedding"]', 'text-embedding-3-small', 'Text Embedding 3 Small', 1536, NULL),
+(2, '["embedding"]', 'text-embedding-3-large', 'Text Embedding 3 Large', 3072, NULL),
+(2, '["chat"]', 'gpt-4o', 'GPT-4o', NULL, 128000),
+(2, '["chat"]', 'gpt-4o-mini', 'GPT-4o Mini', NULL, 128000),
+(3, '["chat"]', 'claude-3-7-sonnet-20250219', 'Claude 3.7 Sonnet', NULL, 200000),
+(3, '["chat"]', 'claude-3-5-sonnet-20241022', 'Claude 3.5 Sonnet', NULL, 200000),
+(4, '["embedding"]', 'text-embedding-004', 'Text Embedding 004', 768, NULL),
+(4, '["chat"]', 'gemini-2.0-flash-exp', 'Gemini 2.0 Flash', NULL, 1048576),
+(4, '["chat"]', 'gemini-1.5-pro', 'Gemini 1.5 Pro', NULL, 2097152);
 
 -- ============================================================================
 -- 4. 知识库模块
@@ -240,8 +243,9 @@ CREATE TABLE knowledge_bases (
     -- 基本信息
     name VARCHAR(255) NOT NULL,
 
-    -- 关联的 AI 服务商配置
-    ai_provider_config_id UUID NOT NULL,
+    -- 关联的 AI 模型
+    embedding_model_id INT NOT NULL REFERENCES ai_models(id) ON DELETE RESTRICT,
+    rerank_model_id INT REFERENCES ai_models(id) ON DELETE SET NULL,
 
     -- Chunking 配置
     chunk_size INTEGER NOT NULL DEFAULT 512,
@@ -261,15 +265,14 @@ CREATE TABLE knowledge_bases (
 
     -- 约束
     CONSTRAINT fk_kb_owner FOREIGN KEY (owner_id)
-        REFERENCES users(id) ON DELETE CASCADE,
-    CONSTRAINT fk_kb_ai_provider FOREIGN KEY (ai_provider_config_id)
-        REFERENCES ai_provider_configs(id) ON DELETE RESTRICT
+        REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- 索引
 CREATE INDEX idx_kb_owner ON knowledge_bases(owner_id);
 CREATE INDEX idx_kb_name ON knowledge_bases(name);
-CREATE INDEX idx_kb_ai_provider ON knowledge_bases(ai_provider_config_id);
+CREATE INDEX idx_kb_embedding_model ON knowledge_bases(embedding_model_id);
+CREATE INDEX idx_kb_rerank_model ON knowledge_bases(rerank_model_id);
 CREATE INDEX idx_kb_deleted ON knowledge_bases(deleted_at);
 CREATE INDEX idx_kb_owner_created ON knowledge_bases(owner_id, created_at DESC)
     WHERE deleted_at IS NULL;
@@ -445,12 +448,54 @@ COMMENT ON COLUMN messages.content_blocks IS 'JSONB 数组，存储 ContentBlock
 COMMENT ON COLUMN messages.token_count IS 'AI 回复消耗的 token 数量，用户消息为 NULL';
 COMMENT ON COLUMN messages.created_at IS '消息发送时间';
 
+-- ============================================================================
+-- 8. 智能体快捷访问列表
+-- ============================================================================
+
+-- 智能体快捷访问列表
+CREATE TABLE assistant_favorites (
+    -- 主键 (UUID v7, 由应用层生成)
+    id UUID PRIMARY KEY,
+
+    -- 用户 ID
+    user_id UUID NOT NULL,
+
+    -- 智能体 ID
+    assistant_id UUID NOT NULL,
+
+    -- 排序顺序（数字越小越靠前，支持用户自定义排序）
+    sort_order INTEGER NOT NULL DEFAULT 0,
+
+    -- 添加时间
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    -- 唯一约束：同一个用户不能重复添加同一个智能体
+    CONSTRAINT uk_user_assistant UNIQUE (user_id, assistant_id)
+);
+
+-- 索引：根据 user_id 查询该用户的快捷访问列表（按排序顺序）
+CREATE INDEX idx_favorites_user_id ON assistant_favorites(user_id, sort_order ASC);
+
+-- 索引：根据 assistant_id 查询有多少用户收藏了该智能体
+CREATE INDEX idx_favorites_assistant_id ON assistant_favorites(assistant_id);
+
+-- 索引：按添加时间查询
+CREATE INDEX idx_favorites_created_at ON assistant_favorites(created_at DESC);
+
+-- 注释
+COMMENT ON TABLE assistant_favorites IS '智能体快捷访问列表：用户收藏的智能体';
+COMMENT ON COLUMN assistant_favorites.user_id IS '用户 ID（外键到 users 表）';
+COMMENT ON COLUMN assistant_favorites.assistant_id IS '智能体 ID（可以是 agents.id 或 official_agents.id）';
+COMMENT ON COLUMN assistant_favorites.sort_order IS '排序顺序，数字越小越靠前，支持用户自定义排序';
+COMMENT ON COLUMN assistant_favorites.created_at IS '添加到快捷访问的时间';
+
 -- +goose StatementEnd
 
 -- +goose Down
 -- +goose StatementBegin
 
 -- 按相反顺序删除表（先删除有外键依赖的表）
+DROP TABLE IF EXISTS assistant_favorites CASCADE;
 DROP TABLE IF EXISTS messages CASCADE;
 DROP TABLE IF EXISTS topics CASCADE;
 DROP TABLE IF EXISTS chunks CASCADE;

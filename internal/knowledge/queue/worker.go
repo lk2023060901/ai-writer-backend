@@ -155,7 +155,7 @@ func (w *Worker) processTask(ctx context.Context, task *DocumentTask, logger *za
 	logger = logger.With(zap.String("document_id", task.DocumentID))
 	logger.Info("processing document task")
 
-	resource := "doc:" + task.DocumentID
+	docResource := "doc:" + task.DocumentID
 
 	// 标记为处理中
 	_, err := w.redis.SAdd(ctx, ProcessingSet, task.DocumentID)
@@ -170,15 +170,22 @@ func (w *Worker) processTask(ctx context.Context, task *DocumentTask, logger *za
 		return
 	}
 
+	// SSE 广播资源列表
+	kbResource := "kb:" + doc.KnowledgeBaseID
+	resources := []string{docResource, kbResource}
+
 	// SSE 广播: 开始处理
 	doc.ProcessStatus = "processing" // 更新状态
-	w.sseHub.Broadcast(resource, sse.Event{
+	event := sse.Event{
 		Type: "status",
 		Data: map[string]interface{}{
 			"document": biz.ToDocumentResponse(doc),
 			"message":  "Document processing started",
 		},
-	})
+	}
+	for _, resource := range resources {
+		w.sseHub.Broadcast(resource, event)
+	}
 
 	// 执行处理
 	err = w.docUseCase.ProcessDocument(ctx, task.DocumentID)
@@ -206,14 +213,17 @@ func (w *Worker) processTask(ctx context.Context, task *DocumentTask, logger *za
 			}
 
 			// SSE 广播: 重试中
-			w.sseHub.Broadcast(resource, sse.Event{
+			retryEvent := sse.Event{
 				Type: "status",
 				Data: map[string]interface{}{
 					"document":    biz.ToDocumentResponse(doc),
 					"retry_count": task.RetryCount,
 					"message":     fmt.Sprintf("Processing failed, retrying (%d/3): %s", task.RetryCount, err.Error()),
 				},
-			})
+			}
+			for _, resource := range resources {
+				w.sseHub.Broadcast(resource, retryEvent)
+			}
 		} else {
 			logger.Error("document processing failed after max retries")
 
@@ -225,13 +235,16 @@ func (w *Worker) processTask(ctx context.Context, task *DocumentTask, logger *za
 			}
 
 			// SSE 广播: 失败
-			w.sseHub.Broadcast(resource, sse.Event{
+			failedEvent := sse.Event{
 				Type: "status",
 				Data: map[string]interface{}{
 					"document": biz.ToDocumentResponse(doc),
 					"message":  fmt.Sprintf("Processing failed after max retries: %s", err.Error()),
 				},
-			})
+			}
+			for _, resource := range resources {
+				w.sseHub.Broadcast(resource, failedEvent)
+			}
 		}
 	} else {
 		logger.Info("document processed successfully")
@@ -244,23 +257,29 @@ func (w *Worker) processTask(ctx context.Context, task *DocumentTask, logger *za
 		if err != nil {
 			logger.Error("failed to get updated document info", zap.Error(err))
 			// 使用默认信息
-			w.sseHub.Broadcast(resource, sse.Event{
+			fallbackEvent := sse.Event{
 				Type: "status",
 				Data: map[string]interface{}{
 					"document_id": task.DocumentID,
 					"status":      "completed",
 					"message":     "Document processing completed successfully",
 				},
-			})
+			}
+			for _, resource := range resources {
+				w.sseHub.Broadcast(resource, fallbackEvent)
+			}
 		} else {
 			// SSE 广播: 完成
-			w.sseHub.Broadcast(resource, sse.Event{
+			completedEvent := sse.Event{
 				Type: "status",
 				Data: map[string]interface{}{
 					"document": biz.ToDocumentResponse(doc),
 					"message":  fmt.Sprintf("Document processing completed successfully. Generated %d chunks.", doc.ChunkCount),
 				},
-			})
+			}
+			for _, resource := range resources {
+				w.sseHub.Broadcast(resource, completedEvent)
+			}
 		}
 	}
 }

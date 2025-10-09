@@ -23,9 +23,13 @@ func NewTopicUseCase(repo TopicRepo) *TopicUseCase {
 }
 
 // CreateTopic creates a new topic
-func (uc *TopicUseCase) CreateTopic(ctx context.Context, assistantID, name string) (*types.Topic, error) {
+func (uc *TopicUseCase) CreateTopic(ctx context.Context, userID, assistantID, name string) (*types.Topic, error) {
 	if assistantID == "" {
 		return nil, fmt.Errorf("assistant ID is required")
+	}
+
+	if userID == "" {
+		return nil, fmt.Errorf("user ID is required")
 	}
 
 	if name == "" {
@@ -35,6 +39,7 @@ func (uc *TopicUseCase) CreateTopic(ctx context.Context, assistantID, name strin
 	topic := &types.Topic{
 		ID:          uuid.New().String(),
 		AssistantID: assistantID,
+		UserID:      userID,
 		Name:        name,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
@@ -67,6 +72,16 @@ func (uc *TopicUseCase) ListTopics(ctx context.Context, assistantID string) ([]*
 	return topics, nil
 }
 
+// ListTopicsByUser lists all topics for a user (across all their assistants)
+func (uc *TopicUseCase) ListTopicsByUser(ctx context.Context, userID string) ([]*types.Topic, error) {
+	topics, err := uc.repo.ListByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list user topics: %w", err)
+	}
+
+	return topics, nil
+}
+
 // UpdateTopic updates a topic
 func (uc *TopicUseCase) UpdateTopic(ctx context.Context, id, name string) (*types.Topic, error) {
 	topic, err := uc.repo.GetByID(ctx, id)
@@ -94,7 +109,7 @@ func (uc *TopicUseCase) DeleteTopic(ctx context.Context, id string) error {
 }
 
 // DeleteAllTopics deletes all topics for an assistant
-func (uc *TopicUseCase) DeleteAllTopics(ctx context.Context, assistantID string) error {
+func (uc *TopicUseCase) DeleteAllTopics(ctx context.Context, userID, assistantID string) error {
 	if err := uc.repo.DeleteByAssistant(ctx, assistantID); err != nil {
 		return fmt.Errorf("failed to delete all topics: %w", err)
 	}
@@ -103,6 +118,7 @@ func (uc *TopicUseCase) DeleteAllTopics(ctx context.Context, assistantID string)
 	topic := &types.Topic{
 		ID:          uuid.New().String(),
 		AssistantID: assistantID,
+		UserID:      userID,
 		Name:        "Default Topic",
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),

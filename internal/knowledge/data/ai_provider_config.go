@@ -8,194 +8,131 @@ import (
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/database"
 )
 
-// AIProviderConfigPO AI服务商配置数据库模型
-type AIProviderConfigPO struct {
-	ID                  string    `gorm:"type:uuid;primarykey"`
-	OwnerID             string    `gorm:"type:uuid;not null;index:idx_ai_provider_configs_owner_id"`
-	ProviderType        string    `gorm:"size:50;not null"`
-	ProviderName        string    `gorm:"size:255;not null"`
-	APIKey              string    `gorm:"type:text;not null"`
-	APIBaseURL          string    `gorm:"type:text"`
-	EmbeddingModel      string    `gorm:"size:255;not null"`
-	EmbeddingDimensions int       `gorm:"not null"`
-	IsEnabled           bool      `gorm:"not null;default:true"`
-	CreatedAt           time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
-	UpdatedAt           time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
+// AIProviderPO AI服务商数据库模型
+type AIProviderPO struct {
+	ID           string    `gorm:"type:uuid;primarykey;default:gen_random_uuid()"`
+	ProviderType string    `gorm:"size:50;not null;unique"`
+	ProviderName string    `gorm:"size:100;not null"`
+	APIBaseURL   string    `gorm:"column:api_base_url;size:255"`
+	APIKey       string    `gorm:"column:api_key;type:text"`
+	IsEnabled    bool      `gorm:"default:true"`
+	CreatedAt    time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
+	UpdatedAt    time.Time `gorm:"not null;default:CURRENT_TIMESTAMP"`
 }
 
-func (AIProviderConfigPO) TableName() string {
-	return "ai_provider_configs"
+func (AIProviderPO) TableName() string {
+	return "ai_providers"
 }
 
-// AIProviderConfigRepo AI服务商配置仓储实现
-type AIProviderConfigRepo struct {
+// AIProviderRepo AI服务商仓储实现
+type AIProviderRepo struct {
 	db *database.DB
 }
 
-// NewAIProviderConfigRepo 创建AI服务商配置仓储
-func NewAIProviderConfigRepo(db *database.DB) biz.AIProviderConfigRepo {
-	return &AIProviderConfigRepo{db: db}
+// NewAIProviderRepo 创建AI服务商仓储
+func NewAIProviderRepo(db *database.DB) biz.AIProviderRepo {
+	return &AIProviderRepo{db: db}
 }
 
-// Create 创建AI服务商配置
-func (r *AIProviderConfigRepo) Create(ctx context.Context, config *biz.AIProviderConfig) error {
-	po := &AIProviderConfigPO{
-		ID:                  config.ID,
-		OwnerID:             config.OwnerID,
-		ProviderType:        config.ProviderType,
-		ProviderName:        config.ProviderName,
-		APIKey:              config.APIKey,
-		APIBaseURL:          config.APIBaseURL,
-		EmbeddingModel:      config.EmbeddingModel,
-		EmbeddingDimensions: config.EmbeddingDimensions,
-		IsEnabled:           config.IsEnabled,
-		CreatedAt:           config.CreatedAt,
-		UpdatedAt:           config.UpdatedAt,
-	}
-
-	return r.db.WithContext(ctx).GetDB().Create(po).Error
-}
-
-// GetByID 根据ID获取AI服务商配置（需要验证权限：官方配置或用户自己的配置）
-func (r *AIProviderConfigRepo) GetByID(ctx context.Context, id string, userID string) (*biz.AIProviderConfig, error) {
-	var po AIProviderConfigPO
+// ListAll 获取所有AI服务商列表（包括禁用的，前端根据 is_enabled 字段显示开关状态）
+func (r *AIProviderRepo) ListAll(ctx context.Context) ([]*biz.AIProvider, error) {
+	var pos []AIProviderPO
 	err := r.db.WithContext(ctx).GetDB().
-		Where("id = ? AND (owner_id = ? OR owner_id = ?)", id, biz.SystemOwnerID, userID).
-		First(&po).Error
-
-	if err != nil {
-		if database.IsRecordNotFoundError(err) {
-			return nil, biz.ErrAIProviderConfigNotFound
-		}
-		return nil, err
-	}
-
-	return r.toConfig(&po), nil
-}
-
-// GetFirstAvailable 获取第一个可用的AI服务商配置（优先用户自己的，否则官方的）
-func (r *AIProviderConfigRepo) GetFirstAvailable(ctx context.Context, userID string) (*biz.AIProviderConfig, error) {
-	var po AIProviderConfigPO
-
-	// 优先查找用户自己的配置
-	err := r.db.WithContext(ctx).GetDB().
-		Where("owner_id = ? AND is_enabled = true", userID).
-		Order("created_at DESC").
-		First(&po).Error
-
-	if err == nil {
-		return r.toConfig(&po), nil
-	}
-
-	if !database.IsRecordNotFoundError(err) {
-		return nil, err
-	}
-
-	// 如果用户没有配置，使用官方配置
-	err = r.db.WithContext(ctx).GetDB().
-		Where("owner_id = ? AND is_enabled = true", biz.SystemOwnerID).
-		Order("created_at DESC").
-		First(&po).Error
-
-	if err != nil {
-		if database.IsRecordNotFoundError(err) {
-			return nil, biz.ErrNoDefaultAIConfig
-		}
-		return nil, err
-	}
-
-	return r.toConfig(&po), nil
-}
-
-// List 获取AI服务商配置列表（官方配置 + 用户自己的配置）
-func (r *AIProviderConfigRepo) List(ctx context.Context, userID string) ([]*biz.AIProviderConfig, error) {
-	var pos []AIProviderConfigPO
-	err := r.db.WithContext(ctx).GetDB().
-		Where("(owner_id = ? OR owner_id = ?) AND is_enabled = true", biz.SystemOwnerID, userID).
-		Order("CASE WHEN owner_id = '" + biz.SystemOwnerID + "' THEN 0 ELSE 1 END, created_at DESC").
+		Order("id ASC").
 		Find(&pos).Error
 
 	if err != nil {
 		return nil, err
 	}
 
-	configs := make([]*biz.AIProviderConfig, len(pos))
+	providers := make([]*biz.AIProvider, len(pos))
 	for i, po := range pos {
-		configs[i] = r.toConfig(&po)
+		providers[i] = r.toProvider(&po)
 	}
 
-	return configs, nil
+	return providers, nil
 }
 
-// Update 更新AI服务商配置
-func (r *AIProviderConfigRepo) Update(ctx context.Context, config *biz.AIProviderConfig) error {
-	updates := map[string]interface{}{
-		"provider_name":        config.ProviderName,
-		"api_key":              config.APIKey,
-		"api_base_url":         config.APIBaseURL,
-		"embedding_model":      config.EmbeddingModel,
-		"embedding_dimensions": config.EmbeddingDimensions,
-		"is_enabled":           config.IsEnabled,
-		"updated_at":           config.UpdatedAt,
-	}
-
-	result := r.db.WithContext(ctx).GetDB().
-		Model(&AIProviderConfigPO{}).
-		Where("id = ? AND owner_id = ?", config.ID, config.OwnerID).
-		Updates(updates)
-
-	if result.Error != nil {
-		return result.Error
-	}
-
-	if result.RowsAffected == 0 {
-		return biz.ErrAIProviderConfigNotFound
-	}
-
-	return nil
-}
-
-// Delete 删除AI服务商配置
-func (r *AIProviderConfigRepo) Delete(ctx context.Context, id string, ownerID string) error {
-	result := r.db.WithContext(ctx).GetDB().
-		Where("id = ? AND owner_id = ?", id, ownerID).
-		Delete(&AIProviderConfigPO{})
-
-	if result.Error != nil {
-		return result.Error
-	}
-
-	if result.RowsAffected == 0 {
-		return biz.ErrAIProviderConfigNotFound
-	}
-
-	return nil
-}
-
-// CountByKnowledgeBase 统计使用该配置的知识库数量
-func (r *AIProviderConfigRepo) CountByKnowledgeBase(ctx context.Context, configID string) (int64, error) {
-	var count int64
+// GetByID 根据ID获取AI服务商（不过滤启用状态，用于管理操作）
+func (r *AIProviderRepo) GetByID(ctx context.Context, id string) (*biz.AIProvider, error) {
+	var po AIProviderPO
 	err := r.db.WithContext(ctx).GetDB().
-		Table("knowledge_bases").
-		Where("ai_provider_config_id = ?", configID).
-		Count(&count).Error
+		Where("id = ?", id).
+		First(&po).Error
 
-	return count, err
+	if err != nil {
+		if database.IsRecordNotFoundError(err) {
+			return nil, biz.ErrAIProviderNotFound
+		}
+		return nil, err
+	}
+
+	return r.toProvider(&po), nil
 }
 
-// toConfig 转换 PO 到业务对象
-func (r *AIProviderConfigRepo) toConfig(po *AIProviderConfigPO) *biz.AIProviderConfig {
-	return &biz.AIProviderConfig{
-		ID:                  po.ID,
-		OwnerID:             po.OwnerID,
-		ProviderType:        po.ProviderType,
-		ProviderName:        po.ProviderName,
-		APIKey:              po.APIKey,
-		APIBaseURL:          po.APIBaseURL,
-		EmbeddingModel:      po.EmbeddingModel,
-		EmbeddingDimensions: po.EmbeddingDimensions,
-		IsEnabled:           po.IsEnabled,
-		CreatedAt:           po.CreatedAt,
-		UpdatedAt:           po.UpdatedAt,
+// GetByType 根据类型获取AI服务商
+func (r *AIProviderRepo) GetByType(ctx context.Context, providerType string) (*biz.AIProvider, error) {
+	var po AIProviderPO
+	err := r.db.WithContext(ctx).GetDB().
+		Where("provider_type = ? AND is_enabled = true", providerType).
+		First(&po).Error
+
+	if err != nil {
+		if database.IsRecordNotFoundError(err) {
+			return nil, biz.ErrAIProviderNotFound
+		}
+		return nil, err
+	}
+
+	return r.toProvider(&po), nil
+}
+
+// UpdateStatus 更新服务商启用状态
+func (r *AIProviderRepo) UpdateStatus(ctx context.Context, id string, isEnabled bool) error {
+	return r.db.WithContext(ctx).GetDB().
+		Model(&AIProviderPO{}).
+		Where("id = ?", id).
+		Update("is_enabled", isEnabled).
+		Error
+}
+
+// UpdateConfig 更新服务商配置（API Key 和 API 地址）
+func (r *AIProviderRepo) UpdateConfig(ctx context.Context, id string, apiKey, apiBaseURL *string) error {
+	updates := make(map[string]interface{})
+
+	if apiKey != nil {
+		updates["api_key"] = *apiKey
+	}
+
+	if apiBaseURL != nil {
+		updates["api_base_url"] = *apiBaseURL
+	}
+
+	// 如果没有要更新的字段，直接返回
+	if len(updates) == 0 {
+		return nil
+	}
+
+	// 添加更新时间
+	updates["updated_at"] = time.Now()
+
+	return r.db.WithContext(ctx).GetDB().
+		Model(&AIProviderPO{}).
+		Where("id = ?", id).
+		Updates(updates).
+		Error
+}
+
+// toProvider 转换 PO 到业务对象
+func (r *AIProviderRepo) toProvider(po *AIProviderPO) *biz.AIProvider {
+	return &biz.AIProvider{
+		ID:           po.ID,
+		ProviderType: po.ProviderType,
+		ProviderName: po.ProviderName,
+		APIBaseURL:   po.APIBaseURL,
+		APIKey:       po.APIKey,
+		IsEnabled:    po.IsEnabled,
+		CreatedAt:    po.CreatedAt,
+		UpdatedAt:    po.UpdatedAt,
 	}
 }

@@ -117,10 +117,20 @@ func (r *knowledgeBaseRepository) Delete(ctx context.Context, id uuid.UUID) erro
 
 // IncrementDocumentCount 增减文档数量
 func (r *knowledgeBaseRepository) IncrementDocumentCount(ctx context.Context, id uuid.UUID, delta int) error {
-	if err := r.db.WithContext(ctx).Model(&models.KnowledgeBase{}).
-		Where("id = ?", id).
-		UpdateColumn("document_count", gorm.Expr("document_count + ?", delta)).Error; err != nil {
-		return fmt.Errorf("failed to increment document count: %w", err)
+	// 如果是减少操作，确保不会减到负数
+	if delta < 0 {
+		if err := r.db.WithContext(ctx).Model(&models.KnowledgeBase{}).
+			Where("id = ? AND document_count + ? >= 0", id, delta).
+			UpdateColumn("document_count", gorm.Expr("document_count + ?", delta)).Error; err != nil {
+			return fmt.Errorf("failed to decrement document count: %w", err)
+		}
+	} else {
+		// 增加操作，直接更新
+		if err := r.db.WithContext(ctx).Model(&models.KnowledgeBase{}).
+			Where("id = ?", id).
+			UpdateColumn("document_count", gorm.Expr("document_count + ?", delta)).Error; err != nil {
+			return fmt.Errorf("failed to increment document count: %w", err)
+		}
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ package injector
 
 import (
 	"context"
+	"time"
 
 	pb "github.com/lk2023060901/ai-writer-backend/api/auth/v1"
 	"github.com/google/wire"
@@ -13,6 +14,8 @@ import (
 	agentservice "github.com/lk2023060901/ai-writer-backend/internal/agent/service"
 	assistantbiz "github.com/lk2023060901/ai-writer-backend/internal/assistant/biz"
 	assistantdata "github.com/lk2023060901/ai-writer-backend/internal/assistant/data"
+	"github.com/lk2023060901/ai-writer-backend/internal/assistant/llm"
+	llmproviders "github.com/lk2023060901/ai-writer-backend/internal/assistant/llm/providers"
 	assistantservice "github.com/lk2023060901/ai-writer-backend/internal/assistant/service"
 	authbiz "github.com/lk2023060901/ai-writer-backend/internal/auth/biz"
 	authdata "github.com/lk2023060901/ai-writer-backend/internal/auth/data"
@@ -29,9 +32,11 @@ import (
 	kbqueue "github.com/lk2023060901/ai-writer-backend/internal/knowledge/queue"
 	kbservice "github.com/lk2023060901/ai-writer-backend/internal/knowledge/service"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/logger"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/mineru"
 	oauth2pkg "github.com/lk2023060901/ai-writer-backend/internal/pkg/oauth2"
 	pkgredis "github.com/lk2023060901/ai-writer-backend/internal/pkg/redis"
 	"github.com/lk2023060901/ai-writer-backend/internal/pkg/sse"
+	"github.com/lk2023060901/ai-writer-backend/internal/pkg/workerpool"
 	"github.com/lk2023060901/ai-writer-backend/internal/server"
 	userbiz "github.com/lk2023060901/ai-writer-backend/internal/user/biz"
 	userdata "github.com/lk2023060901/ai-writer-backend/internal/user/data"
@@ -80,8 +85,11 @@ var repositoryProviderSet = wire.NewSet(
 	provideKnowledgeBaseRepo,
 	provideDocumentRepo,
 	provideChunkRepo,
+	provideFileStorageRepo,
+	provideAssistantRepo,
 	provideTopicRepo,
 	provideMessageRepo,
+	provideFavoriteRepo,
 )
 
 // Use case providers
@@ -95,9 +103,11 @@ var useCaseProviderSet = wire.NewSet(
 	kbbiz.NewModelSyncUseCase,
 	kbbiz.NewDocumentProviderUseCase,
 	kbbiz.NewKnowledgeBaseUseCase,
-	kbbiz.NewDocumentUseCase,
+	provideDocumentUseCase,
+	assistantbiz.NewAssistantUseCase,
 	assistantbiz.NewTopicUseCase,
 	assistantbiz.NewMessageUseCase,
+	assistantbiz.NewFavoriteUseCase,
 )
 
 // Service providers
@@ -105,12 +115,16 @@ var serviceProviderSet = wire.NewSet(
 	provideStorageService,
 	provideVectorDBService,
 	provideEmbeddingService,
+	provideMinerUClient,
 	provideDocumentProcessor,
 	provideEmailConfig,
 	provideOAuth2Config,
 	provideTokenStore,
 	provideTokenProvider,
 	provideSSEHub,
+	provideProviderFactory,
+	provideOrchestrator,
+	provideUploadWorkerPool,
 )
 
 // HTTP/gRPC service providers
@@ -124,8 +138,10 @@ var httpServiceProviderSet = wire.NewSet(
 	kbservice.NewDocumentProviderService,
 	kbservice.NewKnowledgeBaseService,
 	kbservice.NewDocumentService,
+	assistantservice.NewAssistantService,
 	assistantservice.NewTopicService,
 	assistantservice.NewMessageService,
+	assistantservice.NewFavoriteService,
 	provideEmailService,
 	emailhandler.NewEmailHandler,
 	emailhandler.NewOAuth2Handler,
@@ -208,6 +224,34 @@ func provideZapLogger(log *logger.Logger) *zap.Logger {
 	return log.Logger
 }
 
+func provideDocumentUseCase(
+	documentRepo kbbiz.DocumentRepo,
+	chunkRepo kbbiz.ChunkRepo,
+	kbRepo kbbiz.KnowledgeBaseRepo,
+	aiModelRepo kbbiz.AIModelRepo,
+	aiProviderRepo kbbiz.AIProviderRepo,
+	fileStorageRepo kbbiz.FileStorageRepo,
+	storage kbbiz.StorageService,
+	vectorDB kbbiz.VectorDBService,
+	embedder kbbiz.EmbeddingService,
+	processor kbbiz.DocumentProcessor,
+	log *logger.Logger,
+) *kbbiz.DocumentUseCase {
+	return kbbiz.NewDocumentUseCase(
+		documentRepo,
+		chunkRepo,
+		kbRepo,
+		aiModelRepo,
+		aiProviderRepo,
+		fileStorageRepo,
+		storage,
+		vectorDB,
+		embedder,
+		processor,
+		log,
+	)
+}
+
 // Repository providers
 
 func provideUserRepo(d *data.Data) userbiz.UserRepo {
@@ -254,12 +298,25 @@ func provideChunkRepo(d *data.Data) kbbiz.ChunkRepo {
 	return kbdata.NewChunkRepo(d.DBWrapper)
 }
 
+func provideFileStorageRepo(d *data.Data) kbbiz.FileStorageRepo {
+	kbrepo := kbdata.NewFileStorageRepository(d.DBWrapper)
+	return kbdata.NewFileStorageRepo(kbrepo)
+}
+
+func provideAssistantRepo(d *data.Data) assistantbiz.AssistantRepo {
+	return assistantdata.NewAssistantRepo(d.DB)
+}
+
 func provideTopicRepo(d *data.Data) assistantbiz.TopicRepo {
 	return assistantdata.NewTopicRepo(d.DBWrapper)
 }
 
 func provideMessageRepo(d *data.Data) assistantbiz.MessageRepo {
 	return assistantdata.NewMessageRepo(d.DBWrapper)
+}
+
+func provideFavoriteRepo(d *data.Data) assistantbiz.FavoriteRepo {
+	return assistantdata.NewFavoriteRepo(d.DBWrapper)
 }
 
 func provideModelSyncLogRepo(d *data.Data) kbbiz.ModelSyncLogRepo {
@@ -272,8 +329,22 @@ func provideEmbeddingService() kbbiz.EmbeddingService {
 	return kbembedding.NewEmbeddingService()
 }
 
-func provideDocumentProcessor() kbbiz.DocumentProcessor {
-	return kbprocessor.NewDocumentProcessor()
+func provideMinerUClient(config *conf.Config, log *logger.Logger) (*mineru.Client, error) {
+	cfg := &mineru.Config{
+		BaseURL:         config.MinerU.BaseURL,
+		APIKey:          config.MinerU.APIKey,
+		Timeout:         config.MinerU.Timeout,
+		MaxRetries:      config.MinerU.MaxRetries,
+		DefaultLanguage: config.MinerU.DefaultLanguage,
+		EnableFormula:   config.MinerU.EnableFormula,
+		EnableTable:     config.MinerU.EnableTable,
+		ModelVersion:    config.MinerU.ModelVersion,
+	}
+	return mineru.New(cfg, log)
+}
+
+func provideDocumentProcessor(client *mineru.Client, log *logger.Logger) kbbiz.DocumentProcessor {
+	return kbprocessor.NewMinerUProcessor(client, log)
 }
 
 // Email service providers
@@ -321,17 +392,79 @@ func provideEmailService(
 	return emailservice.NewEmailService(emailConfig, tokenProvider)
 }
 
+// provideProviderFactory 提供 AI Provider 工厂
+func provideProviderFactory(
+	aiProviderUseCase *kbbiz.AIProviderUseCase,
+	zapLogger *zap.Logger,
+) llm.ProviderFactory {
+	return llmproviders.NewDatabaseProviderFactory(aiProviderUseCase, zapLogger)
+}
+
+// provideOrchestrator 提供多服务商编排器
+func provideOrchestrator(
+	providerFactory llm.ProviderFactory,
+	docUseCase *kbbiz.DocumentUseCase,
+	zapLogger *zap.Logger,
+) llm.MultiProviderOrchestrator {
+	// 创建知识库适配器
+	knowledgeSearcher := llm.NewKnowledgeAdapter(docUseCase)
+
+	// 创建 Orchestrator
+	return llm.NewOrchestrator(
+		providerFactory,
+		nil, // contextManager
+		nil, // webSearch
+		nil, // fileProcessor
+		nil, // errorHandler
+		nil, // metricsCollector
+		knowledgeSearcher,
+		zapLogger,
+	)
+}
+
+// provideUploadWorkerPool 提供上传文件 Worker Pool
+func provideUploadWorkerPool(
+	config *conf.Config,
+	log *logger.Logger,
+) (*workerpool.Pool, error) {
+	// 配置 Worker Pool（限制最大并发为 2）
+	poolConfig := &workerpool.Config{
+		InitialWorkers: 2,      // 初始 2 个 worker
+		QueueSize:      1000,   // 队列大小 1000
+		EnablePriority: false,  // 暂不启用优先级队列
+		AutoScaling: &workerpool.AutoScalingConfig{
+			Enable:                    true,
+			MinWorkers:                2,
+			MaxWorkers:                2,    // 最大 2 个 worker（固定并发为 2）
+			ScaleUpQueueThreshold:     800,  // 队列 > 800 时扩容
+			ScaleUpUtilizationRatio:   0.8,  // 利用率 > 80% 扩容
+			ScaleDownUtilizationRatio: 0.2,  // 利用率 < 20% 缩容
+			ScaleUpStep:               1,    // 每次扩容 1 个
+			ScaleDownStep:             1,    // 每次缩容 1 个
+			CooldownPeriod:            30 * time.Second, // 30 秒冷却期
+			EnablePredictive:          true, // 启用预测式扩容
+		},
+	}
+
+	// 创建 Worker Pool（自动启动）
+	return workerpool.New(poolConfig, log.Logger)
+}
+
 func newApp(
 	config *conf.Config,
 	log *logger.Logger,
 	httpServer *server.HTTPServer,
 	grpcServer *server.GRPCServer,
 	documentWorker *kbqueue.Worker,
+	uploadPool *workerpool.Pool,
 ) (*App, func()) {
 	// Cleanup function combines worker and data cleanup
 	cleanup := func() {
 		if documentWorker != nil {
 			documentWorker.Stop()
+		}
+		if uploadPool != nil {
+			uploadPool.Shutdown()
 		}
 	}
 
