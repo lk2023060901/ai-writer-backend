@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -248,112 +249,45 @@ func (s *DocumentService) BatchUploadDocuments(c *gin.Context) {
 		})
 	}
 
-	// 创建 SSE 客户端（用于批量上传）
-	client := &sse.Client{
-		ID:       uuid.New().String(),
-		Channel:  make(chan sse.Event, 50), // 增加缓冲区以支持多个文件
-		Resource: "kb:" + kbID,              // 使用知识库资源，与 Worker 广播一致
-	}
+	// ✅ 使用新的 SSE 封装 API - 从 110 行减少到 20 行
+	stream := sse.NewStream(c, s.sseHub).
+		WithResource("kb:" + kbID).
+		WithBufferSize(50).
+		WithHeartbeat(30 * time.Second).
+		OnConnect(func() {
+			s.logger.Info("batch upload connection established",
+				zap.String("kb_id", kbID),
+				zap.Int("file_count", len(files)))
+		}).
+		OnDisconnect(func() {
+			s.logger.Info("batch upload connection closed",
+				zap.String("kb_id", kbID))
+		}).
+		Build()
+	defer stream.Close()
 
-	// 在 goroutine 中使用 Worker Pool 并发上传
-	go func() {
-		defer close(client.Channel)
-
-		// 发送开始事件
-		client.Channel <- sse.Event{
-			Type: "batch-start",
-			Data: map[string]interface{}{
-				"total_count": len(files),
-				"message":     fmt.Sprintf("Starting batch upload of %d files", len(files)),
-			},
-		}
-
-		// 使用 Worker Pool 并发上传
-		successCount := 0
-		failedCount := 0
-		completedCount := 0
-
-		// 结果 channel
-		type uploadResult struct {
-			Index    int
-			Doc      *biz.Document
-			FileName string
-			Error    error
-		}
-		resultCh := make(chan uploadResult, len(files))
-
-		// 提交所有文件到 Worker Pool
-		for i, file := range files {
-			idx := i
-			f := file
-
-			s.uploadPool.Submit(func() {
-				// 上传单个文件
-				doc, err := s.docUseCase.UploadDocument(c.Request.Context(), kbID, userID, f.FileName, f.FileData, f.FileType)
-				resultCh <- uploadResult{
-					Index:    idx,
-					Doc:      doc,
-					FileName: f.FileName,
-					Error:    err,
-				}
-			})
-		}
-
-		// 收集结果并实时推送
-		for range files {
-			result := <-resultCh
-			completedCount++
-
-			if result.Error != nil {
-				failedCount++
-				client.Channel <- sse.Event{
-					Type: "file-failed",
-					Data: map[string]interface{}{
-						"index":     result.Index + 1,
-						"filename":  result.FileName,
-						"error":     result.Error.Error(),
-						"message":   fmt.Sprintf("File '%s' upload failed: %s", result.FileName, result.Error.Error()),
-						"completed": completedCount,
-						"total":     len(files),
-					},
-				}
-			} else {
-				successCount++
-				client.Channel <- sse.Event{
-					Type: "file-uploaded",
-					Data: map[string]interface{}{
-						"index":     result.Index + 1,
-						"total":     len(files),
-						"document":  toDocumentResponse(result.Doc),
-						"message":   fmt.Sprintf("File '%s' uploaded successfully", result.Doc.FileName),
-						"completed": completedCount,
-					},
-				}
-
-				// 加入处理队列
-				err := s.worker.EnqueueDocument(c.Request.Context(), result.Doc.ID)
-				if err != nil {
-					s.logger.Error("failed to enqueue document", zap.String("doc_id", result.Doc.ID), zap.Error(err))
-				}
+	// 使用 BatchUploader 处理批量上传
+	go sse.NewBatchUploader[*biz.UploadFile](stream, len(files)).
+		WithEventPrefix("file"). // 事件类型: file-success, file-failed
+		Process(files, func(ctx context.Context, file *biz.UploadFile) (interface{}, error) {
+			// 上传单个文件
+			doc, err := s.docUseCase.UploadDocument(ctx, kbID, userID, file.FileName, file.FileData, file.FileType)
+			if err != nil {
+				return nil, err
 			}
-		}
+			return toDocumentResponse(doc), nil
+		}).
+		WithWorkerPool(s.uploadPool).
+		OnSuccess(func(index int, file *biz.UploadFile, result interface{}) error {
+			// 成功后加入处理队列
+			if doc, ok := result.(*DocumentResponse); ok && doc.ID != "" {
+				return s.worker.EnqueueDocument(c.Request.Context(), doc.ID)
+			}
+			return nil
+		}).
+		Run(c.Request.Context())
 
-		close(resultCh)
-
-		// 发送完成事件
-		client.Channel <- sse.Event{
-			Type: "batch-complete",
-			Data: map[string]interface{}{
-				"total_count":   len(files),
-				"success_count": successCount,
-				"failed_count":  failedCount,
-				"message":       fmt.Sprintf("Batch upload completed: %d succeeded, %d failed", successCount, failedCount),
-			},
-		}
-	}()
-
-	// 开始流式传输（30秒超时）
-	sse.StreamResponse(c, client, s.sseHub, 30*time.Second)
+	stream.StartStreaming()
 }
 
 // ReprocessDocument 重新处理文档
